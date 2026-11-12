@@ -132,7 +132,7 @@ function pickQuestions(section, count, exclude, used, hardBias, bankOnly, filter
   return picked.map((r) => r.id);
 }
 
-export function createGeneratedTest(user, { modules, fraction, showWrong, title, skipCorrect, bankOnly, filters }) {
+export function createGeneratedTest(user, { modules, fraction, showWrong, title, skipCorrect, bankOnly, filters, timed }) {
   const keys = MODULE_KEYS.filter((k) => modules.includes(k));
   if (!keys.length) throw new Error('Select at least one module');
   const f = Math.max(0, Math.min(1, Number(fraction)));
@@ -150,10 +150,10 @@ export function createGeneratedTest(user, { modules, fraction, showWrong, title,
     mods.push({ key, section, module: Number(key.slice(-1)), title: moduleTitle(key), time: Math.max(60, Math.round((full.time * ids.length) / full.count)), questionIds: ids });
   }
   const stages = stagesFrom(mods, f);
-  return insertTest(user, title || 'Practice SAT', 'generated', { modules: keys, fraction: f, showWrong: !!showWrong, skipCorrect: !!skipCorrect, bankOnly: !!bankOnly, custom: !!filters }, stages);
+  return insertTest(user, title || 'Practice SAT', 'generated', { modules: keys, fraction: f, showWrong: !!showWrong, skipCorrect: !!skipCorrect, bankOnly: !!bankOnly, custom: !!filters, timed: !!timed }, stages);
 }
 
-export function createPdfTest(user, { parsed, questionIds, modules, fraction, showWrong, title }) {
+export function createPdfTest(user, { parsed, questionIds, modules, fraction, showWrong, title, timed }) {
   const keys = MODULE_KEYS.filter((k) => modules.includes(k));
   const f = Math.max(0, Math.min(1, Number(fraction)));
   const mods = [];
@@ -170,10 +170,10 @@ export function createPdfTest(user, { parsed, questionIds, modules, fraction, sh
   }
   if (!mods.length) throw new Error('No questions were found in the selected modules of this PDF');
   const stages = stagesFrom(mods, f, parsed.timings.break || FULL.break);
-  return insertTest(user, title || 'Imported SAT', 'pdf', { modules: keys, fraction: f, showWrong: !!showWrong }, stages);
+  return insertTest(user, title || 'Imported SAT', 'pdf', { modules: keys, fraction: f, showWrong: !!showWrong, timed: !!timed }, stages);
 }
 
-export function createManualTest(user, { questionIds, showWrong, title }) {
+export function createManualTest(user, { questionIds, showWrong, title, timed }) {
   const ids = [...new Set((questionIds || []).map(Number))];
   if (!ids.length) throw new Error('Pick at least one question');
   const qs = questionsByIds(ids, { includeAnswer: false });
@@ -187,20 +187,22 @@ export function createManualTest(user, { questionIds, showWrong, title }) {
   if (!mods.length) throw new Error('None of those questions exist anymore');
   const total = mods.reduce((n, m) => n + m.questionIds.length, 0);
   const stages = stagesFrom(mods, Math.min(1, total / (2 * FULL.rw.count + 2 * FULL.math.count)), FULL.break, 120);
-  return insertTest(user, title || 'My picked questions', 'manual', { modules: mods.map((m) => m.key), fraction: 1, showWrong: !!showWrong }, stages);
+  return insertTest(user, title || 'My picked questions', 'manual', { modules: mods.map((m) => m.key), fraction: 1, showWrong: !!showWrong, timed: !!timed }, stages);
 }
 
-export function createFromCode(user, code, title) {
+export function createFromCode(user, code, title, timed) {
   const src = db.prepare('SELECT * FROM tests WHERE share_code = ?').get(String(code || '').trim().toUpperCase());
   if (!src) throw new Error('No test has that code');
   const stages = JSON.parse(src.stages_json);
-  const config = { ...JSON.parse(src.config_json), sharedFrom: src.share_code };
+  const config = { ...JSON.parse(src.config_json), sharedFrom: src.share_code, timed: !!timed };
   const id = insertTest(user, title || src.title, 'shared', config, stages);
   db.prepare('UPDATE tests SET source_test_id = ?, origin_test_id = ? WHERE id = ?').run(src.id, src.origin_test_id || src.id, id);
   return id;
 }
 
 function insertTest(user, title, kind, config, stages) {
+  // An untimed test has no clock, so it has no breaks either.
+  if (config.timed === false) stages = stages.filter((s) => s.kind !== 'break');
   const state = { stage: 0, remaining: { 0: stages[0].time }, answers: {}, flagged: [], checked: {}, current: {} };
   const t = now();
   const r = db.prepare('INSERT INTO tests (user_id, title, kind, config_json, stages_json, state_json, created_at, updated_at, share_code) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(user.id, title, kind, JSON.stringify(config), JSON.stringify(stages), JSON.stringify(state), t, t, newShareCode());

@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
-import { ThemeProvider, createTheme, CssBaseline } from '@mui/material';
+import { ThemeProvider, createTheme, CssBaseline, alpha } from '@mui/material';
 import App from './App.jsx';
 import { ColorModeContext } from './colorMode.js';
 
@@ -32,11 +32,21 @@ function frosted(dark, strength) {
   };
 }
 
-function pane(dark) {
+// Frosted glass for things that sit on a card and used to be plain white (inputs, alerts, bubbles).
+function frost(dark) {
   return {
-    backgroundColor: dark ? 'rgba(15, 17, 23, 0.28)' : 'rgba(255, 255, 255, 0.24)',
+    backgroundColor: dark ? 'rgba(30, 34, 44, 0.32)' : 'rgba(255, 255, 255, 0.32)',
+    backdropFilter: 'blur(14px) saturate(140%)',
+    WebkitBackdropFilter: 'blur(14px) saturate(140%)',
+  };
+}
+
+// Cards are see-through: the liquid glass drawn behind them gives the rim, light and shadow.
+function pane() {
+  return {
+    backgroundColor: 'transparent',
     backgroundImage: 'none',
-    border: `1px solid ${dark ? 'rgba(255, 255, 255, 0.10)' : 'rgba(255, 255, 255, 0.45)'}`,
+    border: '1px solid transparent',
     boxShadow: 'none',
   };
 }
@@ -58,7 +68,22 @@ function buildTheme(mode, glass) {
       MuiTab: { styleOverrides: { root: { textTransform: 'none', fontWeight: 600 } } },
       MuiPaper: {
         defaultProps: { elevation: 0 },
-        styleOverrides: { root: ({ theme: t }) => (glass ? pane(dark) : { border: `1px solid ${t.palette.divider}`, backgroundImage: 'none' }) },
+        styleOverrides: {
+          root: ({ theme: t }) => (glass ? pane() : { border: `1px solid ${t.palette.divider}`, backgroundImage: 'none' }),
+          // Rounder cards in glass mode give the glass a deeper bevel, so it bends more at the rim.
+          rounded: glass ? { borderRadius: 24 } : {},
+        },
+      },
+      MuiOutlinedInput: { styleOverrides: { root: glass ? frost(dark) : {} } },
+      MuiAlert: {
+        styleOverrides: {
+          root: glass
+            ? ({ ownerState, theme: t }) =>
+                ownerState.variant === 'standard' || !ownerState.variant
+                  ? { ...frost(dark), backgroundColor: alpha(t.palette[ownerState.severity || 'success'].main, dark ? 0.16 : 0.12) }
+                  : {}
+            : {},
+        },
       },
       MuiAppBar: { styleOverrides: { root: glass ? { ...frosted(dark, 0.55), borderTop: 'none', borderLeft: 'none', borderRight: 'none' } : { border: 'none' } } },
       MuiDialog: { styleOverrides: { paper: glass ? frosted(dark, 0.82) : {} } },
@@ -69,6 +94,7 @@ function buildTheme(mode, glass) {
     },
   });
   theme.glass = glass;
+  theme.frost = glass ? frost(dark) : null;
   return theme;
 }
 

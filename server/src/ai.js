@@ -23,8 +23,8 @@ export function aiStatus(user) {
   return { enabled: true, via: r.via, model: r.model };
 }
 
-async function ask(cfg, { system, messages, maxTokens = 4000, schema }) {
-  const { text } = await chat({ apiKey: cfg.apiKey, model: cfg.model, system, messages, maxTokens, schema });
+async function ask(cfg, { system, messages, maxTokens = 4000, schema, think = true }) {
+  const { text } = await chat({ apiKey: cfg.apiKey, model: cfg.model, system, messages, maxTokens, schema, think });
   return text;
 }
 
@@ -81,7 +81,7 @@ export function questionAsText(q) {
 const TUTOR_SYSTEM = `Your name is Mr AI. You are a friendly SAT tutor helping a student understand a question they got wrong.
 Explain in plain, easy words, like talking to a friend. Use short sentences and short paragraphs.
 Walk through the reasoning step by step, and point out why the student's answer was tempting but wrong.
-Do not use markdown headings. Keep math simple and write it inline. If images are attached, they are part of the question.`;
+You can use **bold** for key words and "-" bullet lists. Do not use headings or tables. Keep math simple and write it inline. If images are attached, they are part of the question.`;
 
 export async function tutorChat(cfg, q, userAnswer, history) {
   const intro = [
@@ -103,14 +103,14 @@ export async function tutorChat(cfg, q, userAnswer, history) {
     } else messages.push({ role: m.role, content: text });
   }
   if (messages[messages.length - 1].role !== 'user') messages.push({ role: 'user', content: 'Can you explain more?' });
-  return ask(cfg, { system: TUTOR_SYSTEM, messages, maxTokens: 3000 });
+  return ask(cfg, { system: TUTOR_SYSTEM, messages, maxTokens: 3000, think: false });
 }
 
 export async function studyPlan(cfg, result, wrongSamples) {
   const cats = result.categories.map((c) => `${c.section === 'rw' ? 'Reading and Writing' : 'Math'} - ${c.domain} / ${c.skill}: ${c.correct}/${c.total} correct`).join('\n');
   const samples = wrongSamples.slice(0, 12).map((s, i) => `Missed question ${i + 1} (${s.domain || 'uncategorized'}):\n${s.text.slice(0, 900)}`).join('\n\n');
   const text = `A student just finished a practice SAT.\nScores: Reading and Writing ${result.scores.rw ?? 'not taken'}, Math ${result.scores.math ?? 'not taken'}.\n\nResults by category (weakest first):\n${cats || 'No categorized results.'}\n\n${samples}\n\nWrite a short, encouraging study plan in easy words. List the 3 to 5 topics they should learn first, what exactly to practice for each, and one quick tip per topic. Use simple bullet points with "-". No headings.`;
-  return ask(cfg, { system: 'Your name is Mr AI. You are a helpful, encouraging SAT coach.', messages: [{ role: 'user', content: text }], maxTokens: 3000 });
+  return ask(cfg, { system: 'Your name is Mr AI. You are a helpful, encouraging SAT coach.', messages: [{ role: 'user', content: text }], maxTokens: 3000, think: false });
 }
 
 const ANSWER_SCHEMA = {

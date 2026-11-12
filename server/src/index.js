@@ -159,7 +159,7 @@ app.post('/api/tests/manual', auth, (req, res) => {
 
 app.post('/api/tests/from-code', auth, (req, res) => {
   try {
-    res.json({ id: createFromCode(req.user, req.body.code, req.body.title) });
+    res.json({ id: createFromCode(req.user, req.body.code, req.body.title, req.body.timed === true) });
   } catch (e) {
     res.status(400).json({ error: e.message });
   }
@@ -448,6 +448,7 @@ app.post('/api/tests/import', auth, upload.single('pdf'), wrap(async (req, res) 
       modules,
       fraction: Number(req.body.fraction ?? 1),
       showWrong: req.body.showWrong === 'true',
+      timed: req.body.timed === 'true',
       title: req.body.title || req.file.originalname.replace(/\.pdf$/i, ''),
     });
     res.json({ id, found: parsed.questions.length, added, reused, refreshed, upgraded, readerVersion: V });

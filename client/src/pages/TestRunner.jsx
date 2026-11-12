@@ -80,13 +80,13 @@ function BreakScreen({ stage, remaining, onResume }) {
   );
 }
 
-function ReviewScreen({ stage, answers, flagged, onJump, onSubmit, last }) {
+function ReviewScreen({ stage, answers, flagged, onJump, onSubmit, last, timed }) {
   return (
     <Container maxWidth="md" sx={{ py: 4 }}>
       <Paper sx={{ p: 4 }}>
         <Typography variant="h5" fontWeight={700} textAlign="center">Check your work</Typography>
         <Typography color="text.secondary" textAlign="center" sx={{ mb: 3 }}>
-          On test day you will not be able to move on to the next module until time expires. For this practice, you can submit when you are ready.
+          {timed ? 'On test day you will not be able to move on to the next module until time expires. For this practice, you can submit when you are ready.' : 'This practice is not timed. Submit when you are ready.'}
         </Typography>
         <Divider sx={{ mb: 2 }} />
         <Typography fontWeight={700} sx={{ mb: 2 }}>{stage.title}</Typography>
@@ -148,6 +148,8 @@ export default function TestRunner() {
   const stage = test?.stages[test.state.stage];
   const initial = test ? test.state.remaining[test.state.stage] ?? stage.time : 0;
   const isLastStage = test ? test.state.stage === test.stages.length - 1 : false;
+  // Tests made before the Timed switch existed have no setting and stay timed.
+  const timed = test ? test.config.timed !== false : true;
 
   const advance = useCallback(async () => {
     if (!test || advancing) return;
@@ -162,7 +164,7 @@ export default function TestRunner() {
     }
   }, [test, id, load, navigate, advancing]);
 
-  const [remaining] = useCountdown(initial, !!test, test ? `${test.id}-${test.state.stage}` : '', advance);
+  const [remaining] = useCountdown(initial, !!test && timed, test ? `${test.id}-${test.state.stage}` : '', advance);
   const remainingRef = useRef(remaining);
   remainingRef.current = remaining;
 
@@ -286,12 +288,16 @@ export default function TestRunner() {
             <Typography variant="caption" color="text.secondary" noWrap>{test.title}</Typography>
           </Box>
           <Stack alignItems="center" sx={{ flex: 1 }}>
-            {!hideTimer && (
+            {timed && !hideTimer && (
               <Chip icon={<TimerIcon />} label={formatTime(remaining)} color={lowTime ? 'error' : 'default'} sx={{ fontSize: 18, fontWeight: 700, fontVariantNumeric: 'tabular-nums', px: 1 }} />
             )}
-            <Button size="small" startIcon={hideTimer ? <VisibilityIcon /> : <VisibilityOffIcon />} onClick={() => setHideTimer((h) => !h)}>
-              {hideTimer ? 'Show' : 'Hide'}
-            </Button>
+            {timed ? (
+              <Button size="small" startIcon={hideTimer ? <VisibilityIcon /> : <VisibilityOffIcon />} onClick={() => setHideTimer((h) => !h)}>
+                {hideTimer ? 'Show' : 'Hide'}
+              </Button>
+            ) : (
+              <Typography variant="caption" color="text.secondary">Untimed</Typography>
+            )}
           </Stack>
           <Stack direction="row" spacing={1} sx={{ flex: 1, justifyContent: 'flex-end' }}>
             {stage.section === 'math' && (
@@ -310,6 +316,7 @@ export default function TestRunner() {
           answers={answers}
           flagged={flagged}
           last={isLastStage}
+          timed={timed}
           onJump={(i) => {
             setIndex(i);
             setReviewing(false);
@@ -319,7 +326,7 @@ export default function TestRunner() {
       ) : (
         <Box sx={{ mr: { md: desmos ? '520px' : 0 }, transition: 'margin .2s' }}>
           <Container maxWidth="lg" sx={{ py: 3 }}>
-            <Box component={decorated ? Paper : 'div'} sx={decorated ? { p: { xs: 2, md: 3 }, bgcolor: (t) => alpha(t.palette.background.paper, glass ? 0.5 : 0.85) } : {}}>
+            <Box component={decorated ? Paper : 'div'} sx={decorated ? { p: { xs: 2, md: 3 }, bgcolor: (t) => (glass ? t.frost.backgroundColor : alpha(t.palette.background.paper, 0.85)), backdropFilter: (t) => (glass ? t.frost.backdropFilter : 'none') } : {}}>
             <Stack direction="row" alignItems="center" spacing={2} sx={{ mb: 2, bgcolor: 'action.hover', px: 2, py: 1, borderRadius: 2 }}>
               <Chip label={index + 1} color="primary" sx={{ fontWeight: 700 }} />
               <Button size="small" startIcon={flagged.includes(q.id) ? <BookmarkIcon color="error" /> : <BookmarkBorderIcon />} onClick={toggleFlag} color="inherit">

@@ -91,17 +91,26 @@ async function post(path, apiKey, body, timeoutMs) {
   return data;
 }
 
-export async function chat({ apiKey, model, system, messages, maxTokens = 4000, schema, schemaName = 'result', timeoutMs = 180000 }) {
+// think: false asks the model to answer straight away, without a reasoning step first.
+export async function chat({ apiKey, model, system, messages, maxTokens = 4000, schema, schemaName = 'result', timeoutMs = 180000, think = true }) {
   const info = (await modelInfo(model)) || { vision: true, schema: true, reasoning: true };
   let sys = system || '';
   const body = { model, max_tokens: maxTokens };
-  if (info.reasoning) body.reasoning = { enabled: true };
+  if (info.reasoning) body.reasoning = { enabled: !!think };
   if (schema) {
     if (info.schema) body.response_format = { type: 'json_schema', json_schema: { name: schemaName, strict: true, schema } };
     else sys += `\n\nReply with only one JSON object, no other text, matching this JSON schema:\n${JSON.stringify(schema)}`;
   }
   body.messages = [...(sys ? [{ role: 'system', content: sys }] : []), ...messages.map((m) => ({ role: m.role, content: toParts(m.content, info.vision) }))];
-  const data = await post('/v1/chat/completions', apiKey, body, timeoutMs);
+  let data;
+  try {
+    data = await post('/v1/chat/completions', apiKey, body, timeoutMs);
+  } catch (e) {
+    // Some models always reason and reject turning it off; ask again with their default.
+    if (think || !body.reasoning || !/reason/i.test(e.message)) throw e;
+    delete body.reasoning;
+    data = await post('/v1/chat/completions', apiKey, body, timeoutMs);
+  }
   const choice = data.choices?.[0];
   if (!choice) throw new Error('OpenRouter returned no answer.');
   if (choice.finish_reason === 'content_filter' || choice.native_finish_reason === 'refusal') throw new Error('Mr AI declined to answer this request.');

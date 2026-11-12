@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
-import { Paper, Stack, Typography, TextField, IconButton, Box, CircularProgress, Alert, Avatar } from '@mui/material';
+import { Paper, Stack, Typography, TextField, IconButton, Box, CircularProgress, Alert, Avatar, Button } from '@mui/material';
 import SendIcon from '@mui/icons-material/Send';
 import MrAiIcon from '@mui/icons-material/SentimentSatisfiedAlt';
 import PersonIcon from '@mui/icons-material/Person';
 import { api } from '../api.js';
+import Markdown from './Markdown.jsx';
+import LightbulbIcon from '@mui/icons-material/Lightbulb';
 
-export default function AiChat({ testId, questionId, autoStart = true }) {
+export default function AiChat({ testId, questionId, autoStart = false }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
@@ -66,8 +68,8 @@ export default function AiChat({ testId, questionId, autoStart = true }) {
                 <MrAiIcon sx={{ fontSize: 18 }} />
               </Avatar>
             )}
-            <Paper sx={{ p: 1.5, maxWidth: '85%', bgcolor: m.role === 'user' ? 'primary.main' : 'background.paper', color: m.role === 'user' ? '#fff' : 'text.primary' }}>
-              <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>{m.content}</Typography>
+            <Paper sx={{ p: 1.5, maxWidth: '85%', bgcolor: (t) => (m.role === 'user' ? t.palette.primary.main : t.frost?.backgroundColor || t.palette.background.paper), backdropFilter: (t) => (m.role === 'user' ? 'none' : t.frost?.backdropFilter || 'none'), color: m.role === 'user' ? '#fff' : 'text.primary' }}>
+              {m.role === 'assistant' ? <Markdown text={m.content} /> : <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>{m.content}</Typography>}
             </Paper>
             {m.role === 'user' && (
               <Avatar sx={{ width: 28, height: 28, bgcolor: 'primary.main' }}>
@@ -81,6 +83,11 @@ export default function AiChat({ testId, questionId, autoStart = true }) {
             <CircularProgress size={16} />
             <Typography variant="body2">Mr AI is thinking...</Typography>
           </Stack>
+        )}
+        {!messages.length && !busy && (
+          <Box>
+            <Button size="small" variant="outlined" color="secondary" startIcon={<LightbulbIcon />} onClick={() => send([])}>Explain this question</Button>
+          </Box>
         )}
         <Box ref={endRef} />
       </Stack>

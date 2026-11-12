@@ -16,6 +16,7 @@ import { api, formatDate } from '../api.js';
 import { useAuth } from '../auth.jsx';
 import QuestionView, { DifficultyChip, Explanation } from '../components/QuestionView.jsx';
 import AiChat from '../components/AiChat.jsx';
+import Markdown from '../components/Markdown.jsx';
 import ShareCode from '../components/ShareCode.jsx';
 import GroupsIcon from '@mui/icons-material/Groups';
 
@@ -45,19 +46,18 @@ function StudyPlan({ testId, initial }) {
       setBusy(false);
     }
   };
-  useEffect(() => {
-    if (!initial) load(false);
-  }, []);
   return (
     <Paper sx={{ p: 3 }}>
       <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
         <MrAiIcon color="secondary" />
         <Typography variant="h6" fontWeight={700} sx={{ flexGrow: 1 }}>Mr AI says: learn this next</Typography>
-        <Tooltip title="Write a new plan">
-          <span>
-            <Button size="small" startIcon={<RefreshIcon />} onClick={() => load(true)} disabled={busy}>Refresh</Button>
-          </span>
-        </Tooltip>
+        {plan && (
+          <Tooltip title="Write a new plan">
+            <span>
+              <Button size="small" startIcon={<RefreshIcon />} onClick={() => load(true)} disabled={busy}>Refresh</Button>
+            </span>
+          </Tooltip>
+        )}
       </Stack>
       {busy && (
         <Stack direction="row" spacing={1} alignItems="center" sx={{ color: 'text.secondary' }}>
@@ -66,7 +66,10 @@ function StudyPlan({ testId, initial }) {
         </Stack>
       )}
       {error && <Alert severity="error">{error}</Alert>}
-      {!busy && plan && <Typography sx={{ whiteSpace: 'pre-wrap' }}>{plan}</Typography>}
+      {!busy && plan && <Markdown text={plan} variant="body1" />}
+      {!busy && !plan && !error && (
+        <Button variant="outlined" color="secondary" startIcon={<MrAiIcon />} onClick={() => load(false)}>Make my study plan</Button>
+      )}
     </Paper>
   );
 }

@@ -58,6 +58,7 @@ export default function NewTestDialog({ open, onClose, onCreated }) {
   const [modules, setModules] = useState(['rw1', 'rw2', 'math1', 'math2']);
   const [fraction, setFraction] = useState(1);
   const [showWrong, setShowWrong] = useState(false);
+  const [timed, setTimed] = useState(false);
   const [skipCorrect, setSkipCorrect] = useState(true);
   const [bankOnly, setBankOnly] = useState(false);
   const [custom, setCustom] = useState(false);
@@ -105,11 +106,11 @@ export default function NewTestDialog({ open, onClose, onCreated }) {
     try {
       let res;
       if (source === 'generate') {
-        res = await api.post('/api/tests/generate', { modules, fraction, showWrong, skipCorrect, bankOnly, filters: custom ? filters : undefined, title: title || undefined });
+        res = await api.post('/api/tests/generate', { modules, fraction, showWrong, timed, skipCorrect, bankOnly, filters: custom ? filters : undefined, title: title || undefined });
       } else if (source === 'pick') {
-        res = await api.post('/api/tests/manual', { questionIds: [...picked.keys()], showWrong, title: title || undefined });
+        res = await api.post('/api/tests/manual', { questionIds: [...picked.keys()], showWrong, timed, title: title || undefined });
       } else if (source === 'code') {
-        res = await api.post('/api/tests/from-code', { code, title: title || undefined });
+        res = await api.post('/api/tests/from-code', { code, timed, title: title || undefined });
       } else {
         const fd = new FormData();
         fd.append('pdf', file);
@@ -117,6 +118,7 @@ export default function NewTestDialog({ open, onClose, onCreated }) {
         fd.append('modules', MODULES.map((m) => m.key).join(','));
         fd.append('fraction', '1');
         fd.append('showWrong', String(showWrong));
+        fd.append('timed', String(timed));
         fd.append('addToDatabase', String(addToDb));
         if (title) fd.append('title', title);
         res = await api.form('/api/tests/import', fd);
@@ -214,8 +216,10 @@ export default function NewTestDialog({ open, onClose, onCreated }) {
             </>
           )}
 
+          <Stack>
+            <FormControlLabel control={<Switch checked={timed} onChange={(e) => setTimed(e.target.checked)} />} label={timed ? 'Timed, like the real SAT (with a break between sections)' : 'Timed'} />
           {source !== 'code' && (
-            <Stack>
+            <>
               <FormControlLabel control={<Switch checked={showWrong} onChange={(e) => setShowWrong(e.target.checked)} />} label="Show right and wrong answers instantly" />
               {source === 'generate' && (
                 <>
@@ -232,8 +236,9 @@ export default function NewTestDialog({ open, onClose, onCreated }) {
                   />
                 </>
               )}
-            </Stack>
+            </>
           )}
+          </Stack>
 
           {source === 'generate' && custom && sections.length > 0 && <CategoryPicker bankOnly={bankOnly} sections={sections} onChange={setFilters} />}
 
