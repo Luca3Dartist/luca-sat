@@ -219,13 +219,34 @@ function QuestionEditor({ q, onSaved }) {
   const [domain, setDomain] = useState(q.domain || '');
   const [skill, setSkill] = useState(q.skill || '');
   const [inPool, setInPool] = useState(q.in_pool);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
   const save = async () => {
     await api.put(`/api/admin/questions/${q.id}`, { correct, domain, skill, inPool });
     onSaved();
   };
+  const explain = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      onSaved(await api.post(`/api/admin/questions/${q.id}/explain`));
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
     <Stack spacing={2}>
       <QuestionView question={q} review answer={null} />
+      <Stack direction="row" spacing={2} alignItems="center">
+        <Button variant="outlined" color="secondary" startIcon={<MrAiIcon />} onClick={explain} disabled={busy || !q.correct}>
+          {busy ? 'Mr AI is writing...' : q.rationale_html ? 'Rewrite explanation with Mr AI' : 'Write explanation with Mr AI'}
+        </Button>
+        {!q.correct && <Typography variant="body2" color="text.secondary">Save an answer first</Typography>}
+      </Stack>
+      {busy && <LinearProgress color="secondary" />}
+      {error && <Alert severity="error" onClose={() => setError('')}>{error}</Alert>}
       <Grid container spacing={2} alignItems="center">
         <Grid item xs={12} md={3}>
           <TextField fullWidth size="small" label="Correct answer(s)" helperText="Letter or numbers, comma separated" value={correct} onChange={(e) => setCorrect(e.target.value)} />
@@ -251,10 +272,11 @@ function BankTab() {
   const [bank, setBank] = useState(null);
   const [error, setError] = useState('');
   const [list, setList] = useState({ total: 0, items: [] });
-  const [filters, setFilters] = useState({ section: '', source: '', unanswered: false, search: '' });
+  const [filters, setFilters] = useState({ section: '', source: '', missing: '', search: '' });
   const [page, setPage] = useState(0);
   const timer = useRef(null);
   const load = () => api.get('/api/admin/bank').then(setBank);
+  const updateItem = (q) => setList((l) => ({ ...l, items: l.items.map((x) => (x.id === q.id ? q : x)) }));
   const loadList = () => {
     const p = new URLSearchParams({ page, size: 20, ...Object.fromEntries(Object.entries(filters).filter(([, v]) => v)) });
     api.get(`/api/admin/questions?${p}`).then(setList);
@@ -358,7 +380,12 @@ function BankTab() {
             <MenuItem value="collegeboard">College Board</MenuItem>
             <MenuItem value="pdf">PDF import</MenuItem>
           </TextField>
-          <FormControlLabel control={<Checkbox checked={filters.unanswered} onChange={(e) => { setPage(0); setFilters({ ...filters, unanswered: e.target.checked }); }} />} label="Only without answer" />
+          <TextField select size="small" label="Missing" value={filters.missing} onChange={(e) => { setPage(0); setFilters({ ...filters, missing: e.target.value }); }} sx={{ minWidth: 180 }}>
+            <MenuItem value="">Show all</MenuItem>
+            <MenuItem value="answer">No answer</MenuItem>
+            <MenuItem value="explanation">No explanation</MenuItem>
+            <MenuItem value="category">No category</MenuItem>
+          </TextField>
         </Stack>
         {list.items.map((q) => (
           <Accordion key={q.id} disableGutters TransitionProps={{ unmountOnExit: true }}>
@@ -368,11 +395,12 @@ function BankTab() {
                 <Chip size="small" variant="outlined" label={q.source === 'pdf' ? 'PDF' : 'College Board'} />
                 <DifficultyChip d={q.difficulty} />
                 <Typography variant="body2" noWrap sx={{ flexGrow: 1 }}>{q.skill || q.domain || 'Uncategorized'}</Typography>
+                {!q.rationale_html && <Chip size="small" variant="outlined" color="warning" label="No explanation" />}
                 {q.correct ? <Chip size="small" color="success" label={`Answer ${q.correct.join(', ')}`} /> : <Chip size="small" color="warning" label="No answer" />}
               </Stack>
             </AccordionSummary>
             <AccordionDetails>
-              <QuestionEditor q={q} onSaved={loadList} />
+              <QuestionEditor key={q.rationale_html} q={q} onSaved={(updated) => (updated ? updateItem(updated) : loadList())} />
             </AccordionDetails>
           </Accordion>
         ))}

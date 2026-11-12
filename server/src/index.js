@@ -11,7 +11,7 @@ import { parseSatPdf, IMAGE_DIR } from './pdf.js';
 import { createGeneratedTest, createPdfTest, createManualTest, createFromCode, categoryKey, loadTest, saveState, questionsByIds, computeResult, textHash, FULL, MODULE_KEYS } from './tests.js';
 import { grade } from './grading.js';
 import { resolveAi, aiStatus, maskKey, tutorChat, studyPlan, questionAsText } from './ai.js';
-import { jobStatus, startCollegeBoardFetch, startAnswerGeneration, startExplanationGeneration, stopJob, maybeAutoFill, missingCounts } from './jobs.js';
+import { jobStatus, startCollegeBoardFetch, startAnswerGeneration, startExplanationGeneration, stopJob, maybeAutoFill, missingCounts, explainOne } from './jobs.js';
 import { freeModel, premiumModel, jevModel } from './openrouter.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -586,7 +586,10 @@ app.get('/api/admin/questions', auth, admin, (req, res) => {
     where.push('source = ?');
     params.push(req.query.source);
   }
-  if (req.query.unanswered === 'true') where.push('correct_json IS NULL');
+  const missing = req.query.missing || (req.query.unanswered === 'true' ? 'answer' : '');
+  if (missing === 'answer') where.push('correct_json IS NULL');
+  if (missing === 'explanation') where.push("(rationale_html IS NULL OR rationale_html = '')");
+  if (missing === 'category') where.push("(domain IS NULL OR domain = '' OR skill IS NULL OR skill = '')");
   if (req.query.search) {
     where.push('plain_text LIKE ?');
     params.push(`%${req.query.search}%`);
@@ -610,6 +613,15 @@ app.put('/api/admin/questions/:id', auth, admin, (req, res) => {
   if (inPool !== undefined) db.prepare(`UPDATE ${table} SET in_pool = ? WHERE id = ?`).run(inPool ? 1 : 0, req.params.id);
   res.json({ ok: true });
 });
+
+app.post('/api/admin/questions/:id/explain', auth, admin, wrap(async (req, res) => {
+  try {
+    const q = await explainOne(Number(req.params.id));
+    res.json({ ...q, in_pool: !!db.prepare('SELECT in_pool FROM all_questions WHERE id = ?').get(q.id).in_pool });
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
+}));
 
 app.post('/api/admin/jobs/collegeboard', auth, admin, (req, res) => {
   try {

@@ -1,6 +1,36 @@
 import { db, getSetting } from './db.js';
 import { htmlToText, imageBlocks } from './ai.js';
+import { createCanvas, loadImage } from '@napi-rs/canvas';
 import { decide, openRouterKey, jevModel, imagePart } from './openrouter.js';
+
+const MIN_SIDE = 64;
+const MAX_SIDE = 2048;
+const MAX_RATIO = 8;
+
+// JEV rejects very small or very thin pictures, so pad them onto white (and shrink huge ones).
+async function fitForJev(block) {
+  try {
+    const img = await loadImage(Buffer.from(block.source.data, 'base64'));
+    let { width: w, height: h } = img;
+    if (!w || !h) return null;
+    const scale = Math.min(1, MAX_SIDE / Math.max(w, h));
+    const dw = Math.max(1, Math.round(w * scale));
+    const dh = Math.max(1, Math.round(h * scale));
+    let cw = Math.max(dw, MIN_SIDE);
+    let ch = Math.max(dh, MIN_SIDE);
+    if (cw / ch > MAX_RATIO) ch = Math.ceil(cw / MAX_RATIO);
+    if (ch / cw > MAX_RATIO) cw = Math.ceil(ch / MAX_RATIO);
+    if (cw === w && ch === h && block.source.media_type === 'image/png') return block;
+    const canvas = createCanvas(cw, ch);
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, cw, ch);
+    ctx.drawImage(img, Math.floor((cw - dw) / 2), Math.floor((ch - dh) / 2), dw, dh);
+    return { type: 'image', source: { type: 'base64', media_type: 'image/png', data: (await canvas.encode('png')).toString('base64') } };
+  } catch {
+    return null;
+  }
+}
 
 const DOMAINS = {
   rw: ['Information and Ideas', 'Craft and Structure', 'Expression of Ideas', 'Standard English Conventions'],
@@ -80,12 +110,19 @@ export async function solveWithJev(cfg, q, { answer = true, category = true } = 
     };
   }
   if (!Object.keys(questions).length) return {};
-  const stateParts = [JSON.stringify(state, null, 1), ...imageBlocks(q).map(imagePart)];
+  const text = JSON.stringify(state, null, 1);
+  const images = (await Promise.all(imageBlocks(q).map(fitForJev))).filter(Boolean).map(imagePart);
   let data;
   try {
-    data = await decide({ apiKey: cfg.key, model: cfg.model, state: stateParts, questions });
+    data = await decide({ apiKey: cfg.key, model: cfg.model, state: [text, ...images], questions });
   } catch (e) {
-    throw new Error(`JEV: ${e.message}`);
+    if (!images.length || !/image/i.test(e.message)) throw new Error(`JEV: ${e.message}`);
+    // Still unhappy with a picture: answer from the text alone.
+    try {
+      data = await decide({ apiKey: cfg.key, model: cfg.model, state: [text], questions });
+    } catch (e2) {
+      throw new Error(`JEV: ${e2.message}`);
+    }
   }
   const answers = data.answers || {};
   const out = { model: data.model || cfg.model };

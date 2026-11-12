@@ -290,6 +290,18 @@ export function startExplanationGeneration() {
   });
 }
 
+// Writes (or rewrites) the Mr AI explanation for one question.
+export async function explainOne(id) {
+  const llm = llmConfig();
+  if (!llm) throw new Error('Set the OpenRouter key in Admin, Mr AI first');
+  const row = db.prepare('SELECT * FROM all_questions WHERE id = ?').get(id);
+  if (!row) throw new Error('Question not found');
+  if (!row.correct_json) throw new Error('Give this question an answer first');
+  const text = await explainQuestion(llm, parseQuestion(row));
+  db.prepare(`UPDATE ${qTable(row.id)} SET rationale_html = ?, explanation_ai = 1 WHERE id = ?`).run(`<p>${escapeHtml(text)}</p>`, row.id);
+  return parseQuestion(db.prepare('SELECT * FROM all_questions WHERE id = ?').get(id));
+}
+
 export function hasDefaultKey() {
   return !!openRouterKey();
 }
