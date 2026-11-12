@@ -240,7 +240,8 @@ export function questionsByIds(ids, opts) {
   return ids.map((id) => map.get(id)).filter(Boolean);
 }
 
-export function computeResult(test) {
+// onlyIds: grade just these questions (used for checking answers before the test is finished).
+export function computeResult(test, onlyIds = null) {
   const sections = { rw: { correct: 0, scorable: 0, total: 0 }, math: { correct: 0, scorable: 0, total: 0 } };
   const categories = {};
   const items = [];
@@ -248,6 +249,7 @@ export function computeResult(test) {
     if (stage.kind !== 'module') continue;
     const qs = questionsByIds(stage.questionIds);
     qs.forEach((q, idx) => {
+      if (onlyIds && !onlyIds.has(q.id)) return;
       const ans = test.state.answers[q.id];
       const ok = grade(q, ans);
       const sec = sections[stage.section];

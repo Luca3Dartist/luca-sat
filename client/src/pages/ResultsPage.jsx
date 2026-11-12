@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { Stack, Typography, Paper, Grid, Box, Chip, LinearProgress, Accordion, AccordionSummary, AccordionDetails, Button, Alert, Skeleton, ToggleButtonGroup, ToggleButton, CircularProgress, Tooltip } from '@mui/material';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
@@ -19,6 +19,7 @@ import AiChat from '../components/AiChat.jsx';
 import Markdown from '../components/Markdown.jsx';
 import ShareCode from '../components/ShareCode.jsx';
 import GroupsIcon from '@mui/icons-material/Groups';
+import PlayArrowIcon from '@mui/icons-material/PlayArrow';
 
 function ScoreCard({ icon, label, value, sub, color }) {
   return (
@@ -81,26 +82,35 @@ export default function ResultsPage() {
   const [test, setTest] = useState(null);
   const [filter, setFilter] = useState('wrong');
   const [error, setError] = useState('');
+  const [params] = useSearchParams();
+  const wantSoFar = params.get('sofar') === '1';
   useEffect(() => {
-    api.get(`/api/tests/${id}`).then((t) => {
-      if (t.status !== 'finished') navigate(`/test/${id}`, { replace: true });
+    const load = wantSoFar ? api.post(`/api/tests/${id}/check-so-far`) : api.get(`/api/tests/${id}`);
+    load.then((t) => {
+      if (t.status !== 'finished' && !wantSoFar) navigate(`/test/${id}`, { replace: true });
       else setTest(t);
     }).catch((e) => setError(e.message));
-  }, [id]);
+  }, [id, wantSoFar]);
 
   const rows = useMemo(() => {
     if (!test) return [];
     const out = [];
+    const soFar = test.status !== 'finished';
     for (const s of test.stages) {
       if (s.kind !== 'module') continue;
-      s.questions.forEach((q, i) => out.push({ q, stage: s, number: i + 1, answer: test.state.answers[q.id] }));
+      s.questions.forEach((q, i) => {
+        // Before the test is finished, only checked answers are shown.
+        if (soFar && !test.state.checked[q.id]) return;
+        out.push({ q, stage: s, number: i + 1, answer: test.state.answers[q.id] });
+      });
     }
     return out;
   }, [test]);
 
   if (error) return <Alert severity="error">{error}</Alert>;
   if (!test) return <Skeleton variant="rounded" height={400} />;
-  const r = test.result;
+  const soFar = test.status !== 'finished';
+  const r = soFar ? test.soFar : test.result;
   const wrongCount = rows.filter((x) => x.q.isCorrect === false).length;
   const visible = rows.filter((x) => (filter === 'all' ? true : filter === 'wrong' ? x.q.isCorrect === false : x.q.isCorrect === null || x.q.isCorrect === undefined));
   const weak = r.categories.filter((c) => c.total > 0 && c.correct / c.total < 0.7).slice(0, 5);
@@ -113,22 +123,28 @@ export default function ResultsPage() {
         <Box>
           <Stack direction="row" spacing={2} alignItems="center">
             <Typography variant="h4" fontWeight={700}>{test.title}</Typography>
-            <ShareCode code={test.shareCode} size="medium" />
-            <Button variant="outlined" color="secondary" startIcon={<GroupsIcon />} onClick={() => navigate(`/takers/${test.id}`)}>Who else took it</Button>
+            {soFar ? (
+              <Button variant="contained" startIcon={<PlayArrowIcon />} onClick={() => navigate(`/test/${test.id}`)}>Keep going</Button>
+            ) : (
+              <>
+                <ShareCode code={test.shareCode} size="medium" />
+                <Button variant="outlined" color="secondary" startIcon={<GroupsIcon />} onClick={() => navigate(`/takers/${test.id}`)}>Who else took it</Button>
+              </>
+            )}
           </Stack>
-          <Typography color="text.secondary">Finished {formatDate(test.finishedAt)}</Typography>
+          <Typography color="text.secondary">{soFar ? `Answers so far: ${rows.length} answered, not finished yet` : `Finished ${formatDate(test.finishedAt)}`}</Typography>
         </Box>
       </Stack>
 
       <Grid container spacing={2}>
         <Grid item xs={12} md={4}>
-          <ScoreCard icon={<EmojiEventsIcon fontSize="large" />} color="primary" label={r.scores.projected ? 'Projected total score' : 'Total score'} value={r.scores.total} sub="400 to 1600" />
+          <ScoreCard icon={<EmojiEventsIcon fontSize="large" />} color="primary" label={r.scores.projected ? 'Projected total score' : 'Total score'} value={r.scores.total} sub={soFar ? 'Based on answered questions only' : '400 to 1600'} />
         </Grid>
         <Grid item xs={12} md={4}>
-          <ScoreCard icon={<MenuBookIcon fontSize="large" />} color="secondary" label="Reading and Writing" value={r.scores.rw} sub={r.sections.rw.total ? `${r.sections.rw.correct} of ${r.sections.rw.scorable} correct` : 'Not taken'} />
+          <ScoreCard icon={<MenuBookIcon fontSize="large" />} color="secondary" label="Reading and Writing" value={r.scores.rw} sub={r.sections.rw.total ? `${r.sections.rw.correct} of ${r.sections.rw.scorable} correct` : soFar ? 'Nothing answered yet' : 'Not taken'} />
         </Grid>
         <Grid item xs={12} md={4}>
-          <ScoreCard icon={<CalculateIcon fontSize="large" />} color="success" label="Math" value={r.scores.math} sub={r.sections.math.total ? `${r.sections.math.correct} of ${r.sections.math.scorable} correct` : 'Not taken'} />
+          <ScoreCard icon={<CalculateIcon fontSize="large" />} color="success" label="Math" value={r.scores.math} sub={r.sections.math.total ? `${r.sections.math.correct} of ${r.sections.math.scorable} correct` : soFar ? 'Nothing answered yet' : 'Not taken'} />
         </Grid>
       </Grid>
       {(r.sections.rw.total > r.sections.rw.scorable || r.sections.math.total > r.sections.math.scorable) && (
@@ -136,7 +152,7 @@ export default function ResultsPage() {
       )}
 
       <Grid container spacing={2}>
-        <Grid item xs={12} md={aiOn ? 6 : 12}>
+        <Grid item xs={12} md={aiOn && !soFar ? 6 : 12}>
           <Paper sx={{ p: 3, height: '100%' }}>
             <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 2 }}>
               <TrendingDownIcon color="error" />
@@ -168,7 +184,7 @@ export default function ResultsPage() {
             </Stack>
           </Paper>
         </Grid>
-        {aiOn && (
+        {aiOn && !soFar && (
           <Grid item xs={12} md={6}>
             <StudyPlan testId={test.id} initial={test.studyPlan} />
           </Grid>

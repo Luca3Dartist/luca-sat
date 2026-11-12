@@ -16,6 +16,7 @@ import SendIcon from '@mui/icons-material/Send';
 import FreeBreakfastIcon from '@mui/icons-material/FreeBreakfast';
 import FlagIcon from '@mui/icons-material/Flag';
 import StrikethroughSIcon from '@mui/icons-material/StrikethroughS';
+import FactCheckIcon from '@mui/icons-material/FactCheck';
 import { api, formatTime } from '../api.js';
 import { useAuth } from '../auth.jsx';
 import { useColorMode } from '../colorMode.js';
@@ -51,9 +52,60 @@ function useCountdown(initial, running, stageKey, onEnd) {
   return [remaining, setRemaining];
 }
 
-function DesmosDrawer({ open, onClose }) {
+const DESMOS_MIN = 320;
+const DESMOS_KEY = 'desmosWidth';
+
+function loadDesmosWidth() {
+  try {
+    const w = Number(localStorage.getItem(DESMOS_KEY));
+    if (w >= DESMOS_MIN) return w;
+  } catch {}
+  return 520;
+}
+
+function DesmosDrawer({ open, onClose, width, onResize }) {
+  const [dragging, setDragging] = useState(false);
+
+  const startDrag = (e) => {
+    e.preventDefault();
+    setDragging(true);
+    const move = (ev) => {
+      const max = Math.max(DESMOS_MIN, window.innerWidth - 360);
+      onResize(Math.round(Math.min(max, Math.max(DESMOS_MIN, window.innerWidth - ev.clientX))));
+    };
+    const up = () => {
+      setDragging(false);
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
+
   return (
-    <Drawer anchor="right" variant="persistent" open={open} PaperProps={{ sx: { width: { xs: '100%', md: 520 }, top: 64, height: 'calc(100% - 64px - 72px)' } }}>
+    <Drawer anchor="right" variant="persistent" open={open} PaperProps={{ sx: { width: { xs: '100%', md: width }, top: 64, height: 'calc(100% - 64px - 72px)', overflow: 'visible' } }}>
+      <Tooltip title="Drag to resize" placement="left">
+        <Box
+          onPointerDown={startDrag}
+          sx={{
+            display: { xs: 'none', md: 'flex' },
+            position: 'absolute',
+            left: -6,
+            top: 0,
+            bottom: 0,
+            width: 12,
+            cursor: 'col-resize',
+            zIndex: 2,
+            alignItems: 'center',
+            justifyContent: 'center',
+            '&:hover > div, & > div.active': { bgcolor: 'primary.main' },
+          }}
+        >
+          <Box className={dragging ? 'active' : ''} sx={{ width: 4, height: 48, borderRadius: 2, bgcolor: 'divider', transition: 'background-color .15s' }} />
+        </Box>
+      </Tooltip>
+      {/* While dragging, cover the iframe so it doesn't swallow the pointer. */}
+      {dragging && <Box sx={{ position: 'fixed', inset: 0, zIndex: 3, cursor: 'col-resize' }} />}
       <Stack direction="row" alignItems="center" sx={{ px: 2, py: 1, borderBottom: 1, borderColor: 'divider' }}>
         <FunctionsIcon sx={{ mr: 1 }} />
         <Typography fontWeight={700} sx={{ flexGrow: 1 }}>Desmos Graphing Calculator</Typography>
@@ -122,10 +174,12 @@ export default function TestRunner() {
   const [index, setIndex] = useState(0);
   const [reviewing, setReviewing] = useState(false);
   const [desmos, setDesmos] = useState(false);
+  const [desmosWidth, setDesmosWidth] = useState(loadDesmosWidth);
   const [hideTimer, setHideTimer] = useState(false);
   const [navAnchor, setNavAnchor] = useState(null);
   const [feedback, setFeedback] = useState({});
   const [confirmExit, setConfirmExit] = useState(false);
+  const [confirmCheck, setConfirmCheck] = useState(false);
   const [advancing, setAdvancing] = useState(false);
   const [crossMode, setCrossMode] = useState(false);
 
@@ -147,7 +201,8 @@ export default function TestRunner() {
 
   const stage = test?.stages[test.state.stage];
   const initial = test ? test.state.remaining[test.state.stage] ?? stage.time : 0;
-  const isLastStage = test ? test.state.stage === test.stages.length - 1 : false;
+  // Last if every other module has been submitted (submitted modules have 0 time left).
+  const isLastStage = test ? !test.stages.some((s, i) => s.kind === 'module' && i !== test.state.stage && !(test.state.remaining[i] !== undefined && test.state.remaining[i] <= 0)) : false;
   // Tests made before the Timed switch existed have no setting and stay timed.
   const timed = test ? test.config.timed !== false : true;
 
@@ -164,13 +219,36 @@ export default function TestRunner() {
     }
   }, [test, id, load, navigate, advancing]);
 
+  const resizeDesmos = useCallback((w) => {
+    setDesmosWidth(w);
+    try {
+      localStorage.setItem(DESMOS_KEY, String(w));
+    } catch {}
+  }, []);
+
   const [remaining] = useCountdown(initial, !!test && timed, test ? `${test.id}-${test.state.stage}` : '', advance);
   const remainingRef = useRef(remaining);
   remainingRef.current = remaining;
 
+  const gotoModule = useCallback(async (to) => {
+    if (!test || advancing || to === test.state.stage) return;
+    setAdvancing(true);
+    try {
+      await api.post(`/api/tests/${id}/goto`, { to, remaining: remainingRef.current });
+      setDesmos(false);
+      setNavAnchor(null);
+      await load();
+    } catch {
+      // The button is disabled for modules that can't be opened; a failed jump just stays put.
+    } finally {
+      setAdvancing(false);
+    }
+  }, [test, id, load, advancing]);
+
   useEffect(() => {
     if (!test) return;
-    const save = () => api.put(`/api/tests/${id}/state`, { remaining: remainingRef.current }).catch(() => {});
+    const stageNo = test.state.stage;
+    const save = () => api.put(`/api/tests/${id}/state`, { stage: stageNo, remaining: remainingRef.current }).catch(() => {});
     const t = setInterval(save, 10000);
     window.addEventListener('beforeunload', save);
     return () => {
@@ -182,7 +260,7 @@ export default function TestRunner() {
 
   useEffect(() => {
     if (!test || stage?.kind !== 'module') return;
-    api.put(`/api/tests/${id}/state`, { current: { [test.state.stage]: index }, remaining: remainingRef.current }).catch(() => {});
+    api.put(`/api/tests/${id}/state`, { stage: test.state.stage, current: { [test.state.stage]: index }, remaining: remainingRef.current }).catch(() => {});
   }, [index]);
 
   if (error) return <Alert severity="error" sx={{ m: 4 }}>{error}</Alert>;
@@ -193,6 +271,28 @@ export default function TestRunner() {
       </Box>
     );
   }
+
+  const checkDialog = (
+    <Dialog open={confirmCheck} onClose={() => setConfirmCheck(false)}>
+      <DialogTitle>Check your answers so far?</DialogTitle>
+      <DialogContent>
+        <Typography>You will see which of your answers are right or wrong, with explanations. Questions you have answered get locked so they can't be changed. Questions you haven't answered yet stay hidden, and you can come back and keep going.</Typography>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={() => setConfirmCheck(false)}>Cancel</Button>
+        <Button
+          variant="contained"
+          startIcon={<FactCheckIcon />}
+          onClick={async () => {
+            await api.put(`/api/tests/${id}/state`, { stage: test.state.stage, remaining: remainingRef.current }).catch(() => {});
+            navigate(`/results/${id}?sofar=1`);
+          }}
+        >
+          Check answers
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
 
   const exitBar = (
     <Tooltip title="Save and exit">
@@ -244,7 +344,7 @@ export default function TestRunner() {
   const answers = test.state.answers;
   const flagged = test.state.flagged;
   const instant = !!test.config.showWrong;
-  const locked = instant && !!test.state.checked[q.id];
+  const locked = !!test.state.checked[q.id];
   const fb = feedback[q.id] || (locked ? { answer: q.correct || null, correct: q.isCorrect ?? null } : null);
   const wasCorrect = feedback[q.id]?.correct ?? q.isCorrect;
   const isWrong = locked && wasCorrect === false;
@@ -279,6 +379,13 @@ export default function TestRunner() {
 
   const lowTime = remaining < 300;
 
+  const moduleStages = test.stages.map((s, i) => ({ ...s, index: i })).filter((s) => s.kind === 'module');
+  const modules = moduleStages.map((s) => {
+    const name = s.section === 'rw' ? 'English' : 'Math';
+    const single = moduleStages.filter((x) => x.section === s.section).length === 1;
+    return { index: s.index, label: single ? name : `${name} ${s.module || moduleStages.filter((x) => x.section === s.section && x.index <= s.index).length}` };
+  });
+
   return (
     <Box sx={{ minHeight: '100vh', bgcolor: decorated ? 'transparent' : 'background.paper', pb: 12 }}>
       <AppBar position="sticky" color="inherit" sx={{ borderBottom: 1, borderColor: 'divider' }}>
@@ -305,6 +412,11 @@ export default function TestRunner() {
                 Calculator
               </Button>
             )}
+            <Tooltip title="Check answers so far">
+              <IconButton onClick={() => setConfirmCheck(true)}>
+                <FactCheckIcon />
+              </IconButton>
+            </Tooltip>
             {exitBar}
           </Stack>
         </Toolbar>
@@ -324,7 +436,7 @@ export default function TestRunner() {
           onSubmit={advance}
         />
       ) : (
-        <Box sx={{ mr: { md: desmos ? '520px' : 0 }, transition: 'margin .2s' }}>
+        <Box sx={{ mr: { md: desmos ? `${desmosWidth}px` : 0 }, transition: 'margin .2s' }}>
           <Container maxWidth="lg" sx={{ py: 3 }}>
             <Box component={decorated ? Paper : 'div'} sx={decorated ? { p: { xs: 2, md: 3 }, bgcolor: (t) => (glass ? t.frost.backgroundColor : alpha(t.palette.background.paper, 0.85)), backdropFilter: (t) => (glass ? t.frost.backdropFilter : 'none') } : {}}>
             <Stack direction="row" alignItems="center" spacing={2} sx={{ mb: 2, bgcolor: 'action.hover', px: 2, py: 1, borderRadius: 2 }}>
@@ -398,22 +510,33 @@ export default function TestRunner() {
               );
             })}
           </Grid>
-          <Button
-            fullWidth
-            sx={{ mt: 2 }}
-            variant="outlined"
-            onClick={() => {
-              setReviewing(true);
-              setNavAnchor(null);
-            }}
-          >
-            Go to review page
-          </Button>
+          {modules.length > 1 && (
+            <>
+              <Divider sx={{ my: 2 }} />
+              <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+                {modules.map((m) => {
+                  const current = m.index === test.state.stage;
+                  const left = test.state.remaining[m.index];
+                  const outOfTime = timed && !current && left !== undefined && left <= 0;
+                  return (
+                    <Tooltip key={m.index} title={outOfTime ? 'This module is out of time' : ''}>
+                      <span style={{ flex: 1 }}>
+                        <Button fullWidth size="small" variant={current ? 'contained' : 'outlined'} disabled={outOfTime || advancing} onClick={() => gotoModule(m.index)} sx={{ whiteSpace: 'nowrap' }}>
+                          {m.label}
+                        </Button>
+                      </span>
+                    </Tooltip>
+                  );
+                })}
+              </Stack>
+            </>
+          )}
         </Box>
       </Popover>
 
-      {stage.section === 'math' && <DesmosDrawer open={desmos} onClose={() => setDesmos(false)} />}
+      {stage.section === 'math' && <DesmosDrawer open={desmos} onClose={() => setDesmos(false)} width={desmosWidth} onResize={resizeDesmos} />}
       {exitDialog}
+      {checkDialog}
     </Box>
   );
 }

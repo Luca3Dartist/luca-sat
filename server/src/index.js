@@ -468,8 +468,9 @@ function testPayload(test) {
     const qs = questionsByIds(s.questionIds, { includeAnswer: true }).map((q) => {
       const out = { ...q };
       const checked = test.state.checked[q.id];
-      if (finished || (showWrong && checked)) out.isCorrect = grade(q, test.state.answers[q.id]);
-      if (!finished && !(showWrong && checked)) {
+      // Checked answers are revealed and locked: instant feedback, or "check answers so far".
+      if (finished || checked) out.isCorrect = grade(q, test.state.answers[q.id]);
+      if (!finished && !checked) {
         delete out.correct;
         delete out.rationale_html;
         delete out.explanationAi;
@@ -498,9 +499,11 @@ app.put('/api/tests/:id/state', auth, (req, res) => {
   if (test.status === 'finished') return res.json({ ok: true });
   const { remaining, flagged, current } = req.body;
   const st = test.state;
-  if (typeof remaining === 'number') st.remaining[st.stage] = Math.max(0, Math.min(remaining, test.stages[st.stage].time));
+  // A save sent for a stage the test has since left must not overwrite the new stage's clock.
+  const sameStage = req.body.stage === undefined || Number(req.body.stage) === st.stage;
+  if (typeof remaining === 'number' && sameStage) st.remaining[st.stage] = Math.max(0, Math.min(remaining, test.stages[st.stage].time));
   if (Array.isArray(flagged)) st.flagged = flagged.map(Number);
-  if (current && typeof current === 'object') st.current = { ...st.current, [st.stage]: Number(current[st.stage] ?? 0) };
+  if (current && typeof current === 'object' && sameStage) st.current = { ...st.current, [st.stage]: Number(current[st.stage] ?? 0) };
   if (req.body.crossed && typeof req.body.crossed === 'object') {
     st.crossed = st.crossed || {};
     for (const [qid, letters] of Object.entries(req.body.crossed)) {
@@ -518,7 +521,7 @@ app.post('/api/tests/:id/answer', auth, (req, res) => {
   const stage = test.stages[test.state.stage];
   const qid = Number(req.body.questionId);
   if (stage.kind !== 'module' || !stage.questionIds.includes(qid)) return res.status(400).json({ error: 'That question is not in the current module' });
-  if (test.config.showWrong && test.state.checked[qid]) return res.status(400).json({ error: 'This answer is locked' });
+  if (test.state.checked[qid]) return res.status(400).json({ error: 'This answer is locked' });
   test.state.answers[qid] = req.body.answer ?? null;
   let feedback = null;
   if (test.config.showWrong && req.body.check) {
@@ -545,15 +548,51 @@ app.post('/api/tests/:id/next', auth, (req, res) => {
   if (Number(req.body.from) !== test.state.stage) return res.json({ stage: test.state.stage });
   const st = test.state;
   st.remaining[st.stage] = 0;
-  st.stage++;
-  if (st.stage >= test.stages.length) {
-    st.stage = test.stages.length - 1;
+  // Modules can be visited out of order, so go to the next one not yet submitted,
+  // wrapping back to any that were skipped. A submitted stage has 0 time left.
+  const done = (i) => st.remaining[i] !== undefined && st.remaining[i] <= 0;
+  let next = test.stages.findIndex((s, i) => i > st.stage && !done(i));
+  if (next === -1) next = test.stages.findIndex((s, i) => s.kind === 'module' && !done(i));
+  if (next === -1) {
     finishTest(test);
     return res.json({ finished: true });
   }
-  st.remaining[st.stage] = test.stages[st.stage].time;
+  st.stage = next;
+  if (st.remaining[next] === undefined) st.remaining[next] = test.stages[next].time;
   saveState(test.id, st);
   res.json({ stage: st.stage });
+});
+
+// Jump to another module without submitting the current one. Each module keeps its own clock.
+app.post('/api/tests/:id/goto', auth, (req, res) => {
+  const test = loadTest(req.params.id, req.user.id);
+  if (!test) return res.status(404).json({ error: 'Test not found' });
+  if (test.status === 'finished') return res.json({ finished: true });
+  const to = Number(req.body.to);
+  const target = test.stages[to];
+  if (!target || target.kind !== 'module') return res.status(400).json({ error: 'No such module' });
+  const st = test.state;
+  const timed = test.config.timed !== false;
+  if (timed && st.remaining[to] !== undefined && st.remaining[to] <= 0) return res.status(400).json({ error: 'That module is out of time' });
+  if (typeof req.body.remaining === 'number') st.remaining[st.stage] = Math.max(0, Math.min(req.body.remaining, test.stages[st.stage].time));
+  st.stage = to;
+  if (st.remaining[to] === undefined) st.remaining[to] = target.time;
+  saveState(test.id, st);
+  res.json({ stage: st.stage });
+});
+
+// Grade what has been answered so far. Those answers are locked so they can't be changed after seeing them.
+app.post('/api/tests/:id/check-so-far', auth, (req, res) => {
+  const test = loadTest(req.params.id, req.user.id);
+  if (!test) return res.status(404).json({ error: 'Test not found' });
+  if (test.status === 'finished') return res.json({ ...testPayload(test), soFar: null });
+  const st = test.state;
+  for (const [qid, ans] of Object.entries(st.answers)) {
+    if (ans !== null && ans !== undefined && ans !== '') st.checked[qid] = true;
+  }
+  saveState(test.id, st);
+  const ids = new Set(Object.keys(st.checked).filter((k) => st.checked[k]).map(Number));
+  res.json({ ...testPayload(test), soFar: computeResult(test, ids) });
 });
 
 app.post('/api/tests/:id/finish', auth, (req, res) => {

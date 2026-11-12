@@ -20,7 +20,7 @@ export const IMAGE_DIR = path.join(here, '..', 'data', 'images');
 fs.mkdirSync(IMAGE_DIR, { recursive: true });
 
 // Bump when the reader changes how questions come out, so old imports can be found and replaced.
-export const PDF_READER_VERSION = 2;
+export const PDF_READER_VERSION = 3;
 
 const SCALE = 2.5;
 const PAGE_W = 612;
@@ -418,6 +418,74 @@ async function renderBlocks(blocks, renderer, colX0, colX1, keepLines) {
   return { html: html.join('\n'), text: text.join('\n') };
 }
 
+async function renderChoice(L, cItems, cGfx, renderer, body) {
+  const cLines = groupLines(cItems, body);
+  const t = cLines.map(lineText).join(' ').trim();
+  let html;
+  if (!cLines.length && !cGfx.length) html = '';
+  else if (cGfx.length || needsImage(cLines)) {
+    const xs0 = [...cLines.map((l) => l.x0), ...cGfx.map((g) => g.x0)];
+    const xs1 = [...cLines.map((l) => l.x1), ...cGfx.map((g) => g.x1)];
+    const tops = [...cLines.map((l) => l.top), ...cGfx.map((g) => g.y1)];
+    const bots = [...cLines.map((l) => l.bottom), ...cGfx.map((g) => g.y0)];
+    html = await renderer.crop(Math.min(...xs0), Math.max(...tops) + 1, Math.max(...xs1), Math.min(...bots) - 1, t || 'figure');
+  } else html = cLines.map(lineHtml).join(' ').replace(/\s+/g, ' ').trim();
+  return { id: L, html, text: t || '[figure]' };
+}
+
+// Answer choices that didn't fit under their question sit at the top of the next page,
+// sometimes as a 2x2 grid (A B / C D) of graphs. Read them by label position.
+async function readContinuedChoices(lead, gfx, renderer, body, bottomLimit) {
+  const labels = {};
+  for (const L of ['A', 'B', 'C', 'D']) {
+    const lab = lead.filter((i) => i.str.trim() === `${L})`).sort((a, b) => b.y - a.y)[0];
+    if (!lab) return null;
+    labels[L] = lab;
+  }
+  const rows = [];
+  for (const L of ['A', 'B', 'C', 'D']) {
+    const lab = labels[L];
+    const row = rows.find((r) => Math.abs(r.y - lab.y) < 4);
+    if (row) row.labs.push(lab);
+    else rows.push({ y: lab.y, labs: [lab] });
+  }
+  rows.sort((a, b) => b.y - a.y);
+  // Labels must read A, B, C, D left to right, top to bottom.
+  const order = rows.flatMap((r) => r.labs.sort((a, b) => a.x - b.x));
+  if (order.map((l) => l.str.trim()).join('') !== 'A)B)C)D)') return null;
+  const T = body * 1.1;
+  const ey = (i) => (i.size < body - 0.6 ? i.y - body * 0.45 : i.y);
+  const regions = [];
+  rows.forEach((r, ri) => {
+    r.labs.forEach((lab, k) => {
+      const reg = { L: lab.str.trim()[0], lab, x0: lab.x + 8, x1: k + 1 < r.labs.length ? r.labs[k + 1].x - 4 : PAGE_W - 12, top: r.y + T, bottom: ri + 1 < rows.length ? rows[ri + 1].y + T : bottomLimit };
+      // A graph drawn next to its label can rise above the label line; take all of it.
+      let grew = true;
+      while (grew) {
+        grew = false;
+        for (const g of gfx) {
+          const cx = (g.x0 + g.x1) / 2;
+          if (cx > reg.x0 && cx < reg.x1 && g.y0 < reg.top && g.y1 > reg.top && g.y0 > reg.bottom) {
+            reg.top = g.y1 + 1;
+            grew = true;
+          }
+        }
+      }
+      regions.push(reg);
+    });
+  });
+  const choices = [];
+  for (const reg of regions.sort((a, b) => a.L.localeCompare(b.L))) {
+    const cItems = lead.filter((i) => !Object.values(labels).includes(i) && i.x >= reg.x0 && i.x < reg.x1 && ey(i) <= reg.top && ey(i) > reg.bottom);
+    const cGfx = gfx.filter((g) => {
+      const cx = (g.x0 + g.x1) / 2;
+      return cx >= reg.x0 && cx < reg.x1 && g.y1 <= reg.top + 2 && g.y0 >= reg.bottom - 2;
+    });
+    choices.push(await renderChoice(reg.L, cItems, cGfx, renderer, body));
+  }
+  return choices;
+}
+
 function detectTimings(allText) {
   const timings = {};
   const re = /(Reading and Writing|Math),\s*Module\s*(\d)\s*:\s*(\d+)\s*minutes/gi;
@@ -474,9 +542,8 @@ export async function parseSatPdf(buffer, onProgress) {
         expected++;
       }
     }
-    if (!starts.length) continue;
     const body = bodySize(content);
-    const gfx = (await graphicsBoxes(page)).filter((g) => {
+    const loadGfx = async () => (await graphicsBoxes(page)).filter((g) => {
       const w = g.x1 - g.x0;
       const h = g.y1 - g.y0;
       if (g.y0 > TOP_LIMIT || g.y1 < BOTTOM_LIMIT) return false;
@@ -484,6 +551,25 @@ export async function parseSatPdf(buffer, onProgress) {
       if (w < 0.5 && h < 0.5) return false;
       return true;
     });
+    const prev = questions[questions.length - 1];
+    if (!isIntro && prev && prev.page === p - 1 && prev.type === 'spr' && prev.section === section && prev.module === moduleNo) {
+      const firstLeft = starts.filter((s) => s.x <= split).sort((a, b) => b.y - a.y)[0];
+      if (!starts.length || firstLeft) {
+        const leadBottom = firstLeft ? firstLeft.y + 14 : BOTTOM_LIMIT;
+        const lead = content.filter((i) => i.y > leadBottom && (firstLeft ? i.x < split : true));
+        if (['A', 'B', 'C', 'D'].every((L) => lead.some((i) => i.str.trim() === `${L})`))) {
+          const leadGfx = (await loadGfx()).filter((g) => g.y0 > leadBottom - 2 && (firstLeft ? (g.x0 + g.x1) / 2 < split : true));
+          const choices = await readContinuedChoices(lead, leadGfx, new PageRenderer(page), body, leadBottom);
+          if (choices) {
+            prev.type = 'mcq';
+            prev.choices = choices;
+            prev.text += '\n' + choices.map((c) => `${c.id}) ${c.text}`).join('\n');
+          }
+        }
+      }
+    }
+    if (!starts.length) continue;
+    const gfx = await loadGfx();
     const italicFonts = new Set();
     for (const f of new Set(content.map((i) => i.font))) {
       try {
@@ -590,22 +676,9 @@ export async function parseSatPdf(buffer, onProgress) {
             const bottom = k === 3 ? seg.bottom : ys[k + 1] + T;
             const cItems = seg.items.filter((i) => i !== lab && ey(i) <= top && ey(i) > bottom && i.x > lab.x + 8);
             const cGfx = seg.gfx.filter((g) => g.y1 <= top + 2 && g.y0 >= bottom - 2 && g.x0 > lab.x + 8);
-            const cLines = groupLines(cItems, body);
-            choiceParts.push({ L, lab, cLines, cGfx });
+            choiceParts.push({ L, cItems, cGfx });
           }
-          for (const { L, cLines, cGfx } of choiceParts) {
-            const t = cLines.map(lineText).join(' ').trim();
-            let html;
-            if (!cLines.length && !cGfx.length) html = '';
-            else if (cGfx.length || needsImage(cLines)) {
-              const xs0 = [...cLines.map((l) => l.x0), ...cGfx.map((g) => g.x0)];
-              const xs1 = [...cLines.map((l) => l.x1), ...cGfx.map((g) => g.x1)];
-              const tops = [...cLines.map((l) => l.top), ...cGfx.map((g) => g.y1)];
-              const bots = [...cLines.map((l) => l.bottom), ...cGfx.map((g) => g.y0)];
-              html = await renderer.crop(Math.min(...xs0), Math.max(...tops) + 1, Math.max(...xs1), Math.min(...bots) - 1, t || 'figure');
-            } else html = cLines.map(lineHtml).join(' ').replace(/\s+/g, ' ').trim();
-            choices.push({ id: L, html, text: t || '[figure]' });
-          }
+          for (const { L, cItems, cGfx } of choiceParts) choices.push(await renderChoice(L, cItems, cGfx, renderer, body));
         }
         const blocks = buildBlocks(groupLines(stemItems, body), stemGfx, body, section === 'math' ? body * 2.7 : body * 1.55);
         const r = await renderBlocks(blocks, renderer, seg.x0, seg.x1, section === 'math');
