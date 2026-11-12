@@ -48,7 +48,7 @@ export default function SettingsPage() {
 
   const setHate = async (v) => setUser(await api.put('/api/me/settings', { hateAi: v }));
 
-  const aiLabel = user.ai?.enabled ? `Mr AI is on${user.ai.via === 'premium' ? ' with the premium model' : ''} (${user.ai.model})` : user.hateAi ? 'Mr AI is turned off' : 'Mr AI is not available until an admin sets it up';
+  const aiLabel = user.ai?.enabled ? 'Mr AI is on' : user.hateAi ? 'Mr AI is turned off' : 'Mr AI is not available until an admin sets it up';
 
   return (
     <Stack spacing={3} sx={{ maxWidth: 640 }}>

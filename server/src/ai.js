@@ -20,7 +20,8 @@ export function aiStatus(user) {
   if (user.hate_ai) return { enabled: false, reason: 'hate_ai' };
   const r = resolveAi(user);
   if (!r) return { enabled: false, reason: 'no_key' };
-  return { enabled: true, via: r.via, model: r.model };
+  // Users only learn whether Mr AI is on, not which model or tier they get.
+  return { enabled: true };
 }
 
 async function ask(cfg, { system, messages, maxTokens = 4000, schema, think = true }) {

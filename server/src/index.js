@@ -46,7 +46,8 @@ function publicUser(u) {
     username: u.username,
     isAdmin: !!u.is_admin,
     hateAi: !!u.hate_ai,
-    premium: !!u.premium,
+    colorMode: u.color_mode === 'dark' || u.color_mode === 'light' ? u.color_mode : null,
+    glass: u.glass_ui === null || u.glass_ui === undefined ? null : !!u.glass_ui,
     background: u.background_file ? `/api/me/background?v=${u.background_version}` : null,
     backgroundAnimated: /\.gif$/i.test(u.background_file || ''),
     ai: aiStatus(u),
@@ -109,6 +110,8 @@ app.put('/api/me/password', auth, (req, res) => {
 
 app.put('/api/me/settings', auth, (req, res) => {
   if (req.body.hateAi !== undefined) db.prepare('UPDATE users SET hate_ai = ? WHERE id = ?').run(req.body.hateAi ? 1 : 0, req.user.id);
+  if (req.body.colorMode === 'dark' || req.body.colorMode === 'light') db.prepare('UPDATE users SET color_mode = ? WHERE id = ?').run(req.body.colorMode, req.user.id);
+  if (typeof req.body.glass === 'boolean') db.prepare('UPDATE users SET glass_ui = ? WHERE id = ?').run(req.body.glass ? 1 : 0, req.user.id);
   res.json(publicUser(db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id)));
 });
 

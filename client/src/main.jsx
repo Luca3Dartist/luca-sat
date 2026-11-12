@@ -115,6 +115,11 @@ function Root() {
         writePref('glass-ui', on ? 'on' : 'off');
         setGlass(on);
       },
+      setMode: (next) => {
+        if (next !== 'dark' && next !== 'light') return;
+        writePref('color-mode', next);
+        setMode(next);
+      },
     }),
     [mode, glass]
   );

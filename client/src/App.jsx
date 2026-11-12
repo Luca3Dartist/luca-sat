@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react';
 import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { GlobalStyles } from '@mui/material';
 import { AppBar, Toolbar, Typography, Tabs, Tab, Box, IconButton, Tooltip, CircularProgress, Container, Stack } from '@mui/material';
@@ -10,6 +11,7 @@ import DarkModeIcon from '@mui/icons-material/DarkMode';
 import LightModeIcon from '@mui/icons-material/LightMode';
 import { AuthProvider, useAuth } from './auth.jsx';
 import { useColorMode } from './colorMode.js';
+import { api } from './api.js';
 import Logo from './components/Logo.jsx';
 import GlassLayer from './components/GlassLayer.jsx';
 import LoginPage from './pages/LoginPage.jsx';
@@ -122,9 +124,48 @@ function Routed() {
   );
 }
 
+// Dark mode and liquid glass are saved on the account, so they follow you to other devices.
+// On login the saved choice wins; an account with nothing saved yet keeps this device's choice
+// and saves it.
+function PrefsSync() {
+  const { user, setUser } = useAuth();
+  const { mode, glass, setMode, setGlass } = useColorMode();
+  const applied = useRef(null);
+  // The account's choice being applied; saving waits until the screen shows it.
+  const pending = useRef(null);
+  const userId = user?.id ?? null;
+  useEffect(() => {
+    if (!user) {
+      applied.current = null;
+      pending.current = null;
+      return;
+    }
+    if (applied.current === user.id) return;
+    const next = { mode: user.colorMode || mode, glass: typeof user.glass === 'boolean' ? user.glass : glass };
+    pending.current = next;
+    if (next.mode !== mode) setMode(next.mode);
+    if (next.glass !== glass) setGlass(next.glass);
+    applied.current = user.id;
+  }, [userId]);
+  useEffect(() => {
+    if (!user || applied.current !== user.id) return;
+    if (pending.current) {
+      if (mode !== pending.current.mode || glass !== pending.current.glass) return;
+      pending.current = null;
+    }
+    if (user.colorMode === mode && user.glass === glass) return;
+    api
+      .put('/api/me/settings', { colorMode: mode, glass })
+      .then((saved) => setUser((u) => (u && u.id === saved.id ? { ...u, colorMode: saved.colorMode, glass: saved.glass } : u)))
+      .catch(() => {});
+  }, [mode, glass, userId, user?.colorMode, user?.glass]);
+  return null;
+}
+
 export default function App() {
   return (
     <AuthProvider>
+      <PrefsSync />
       <Routed />
     </AuthProvider>
   );

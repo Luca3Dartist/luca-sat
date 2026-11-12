@@ -163,6 +163,10 @@ for (const table of ['questions', 'bank_questions']) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN explanation_ai INTEGER NOT NULL DEFAULT 0`);
   }
 }
+// Look preferences saved on the account (NULL = not saved yet, the device's own choice is used).
+for (const [c, type] of [['color_mode', 'TEXT'], ['glass_ui', 'INTEGER']]) {
+  if (!db.prepare('PRAGMA table_info(users)').all().some((x) => x.name === c)) db.exec(`ALTER TABLE users ADD COLUMN ${c} ${type}`);
+}
 // Which version of the PDF reader made a question (NULL = the old picture-heavy reader).
 for (const table of ['questions', 'bank_questions']) {
   if (!db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === 'parser_version')) db.exec(`ALTER TABLE ${table} ADD COLUMN parser_version INTEGER`);
