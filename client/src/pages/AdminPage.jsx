@@ -415,10 +415,29 @@ function BankTab() {
   );
 }
 
+function VersionTag() {
+  const [v, setV] = useState(null);
+  useEffect(() => {
+    api.get('/api/admin/version').then(setV).catch(() => {});
+  }, []);
+  if (!v?.commit) return null;
+  const when = v.date ? new Date(v.date).toLocaleString() : '';
+  return (
+    <Typography
+      variant="caption"
+      title={`Commit ${v.commit}${when ? `, ${when}` : ''}`}
+      sx={{ position: 'fixed', right: 12, bottom: 8, opacity: 0.35, fontFamily: 'monospace', pointerEvents: 'auto', zIndex: 1, userSelect: 'all' }}
+    >
+      v{v.number} · {v.commit}
+    </Typography>
+  );
+}
+
 export default function AdminPage() {
   const [tab, setTab] = useState(0);
   return (
     <Stack spacing={3}>
+      <VersionTag />
       <Typography variant="h4" fontWeight={700}>Admin</Typography>
       <Tabs value={tab} onChange={(e, v) => setTab(v)}>
         <Tab icon={<PeopleIcon />} iconPosition="start" label="Users" />

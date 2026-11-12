@@ -6,6 +6,7 @@ import jwt from 'jsonwebtoken';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
+import { execFileSync } from 'child_process';
 import { db, getSetting, setSetting, parseQuestion, now, qTable, BANK_OFFSET } from './db.js';
 import { parseSatPdf, IMAGE_DIR, PDF_READER_VERSION } from './pdf.js';
 import { createGeneratedTest, createPdfTest, createManualTest, createFromCode, categoryKey, loadTest, saveState, questionsByIds, computeResult, textHash, FULL, MODULE_KEYS } from './tests.js';
@@ -15,6 +16,16 @@ import { jobStatus, startCollegeBoardFetch, startAnswerGeneration, startExplanat
 import { freeModel, premiumModel, jevModel } from './openrouter.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+
+// Which commit is running: v<number of commits> and the short hash, read once at startup.
+const APP_VERSION = (() => {
+  const git = (...args) => execFileSync('git', ['-C', path.join(here, '..', '..'), ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  try {
+    return { number: Number(git('rev-list', '--count', 'HEAD')), commit: git('rev-parse', '--short', 'HEAD'), date: git('log', '-1', '--format=%cI') };
+  } catch {
+    return { number: null, commit: null, date: null };
+  }
+})();
 const app = express();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 80 * 1024 * 1024 } });
 const PORT = Number(process.env.PORT || 3001);
@@ -317,6 +328,8 @@ app.get('/api/tests', auth, (req, res) => {
   const rows = db.prepare('SELECT * FROM tests WHERE user_id = ? ORDER BY updated_at DESC').all(req.user.id);
   res.json(rows.map(testSummary));
 });
+
+app.get('/api/admin/version', auth, admin, (req, res) => res.json(APP_VERSION));
 
 app.get('/api/meta', auth, (req, res) => {
   const counts = Object.fromEntries(db.prepare('SELECT section, COUNT(*) AS n FROM all_questions WHERE in_pool = 1 GROUP BY section').all().map((r) => [r.section, r.n]));

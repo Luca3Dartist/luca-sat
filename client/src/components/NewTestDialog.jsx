@@ -113,8 +113,9 @@ export default function NewTestDialog({ open, onClose, onCreated }) {
       } else {
         const fd = new FormData();
         fd.append('pdf', file);
-        fd.append('modules', modules.join(','));
-        fd.append('fraction', String(fraction));
+        // A PDF test is taken as printed: every module it has, at full length.
+        fd.append('modules', MODULES.map((m) => m.key).join(','));
+        fd.append('fraction', '1');
         fd.append('showWrong', String(showWrong));
         fd.append('addToDatabase', String(addToDb));
         if (title) fd.append('title', title);
@@ -139,7 +140,7 @@ export default function NewTestDialog({ open, onClose, onCreated }) {
   const customReady = !custom || (filters?.skills?.length > 0 && filters?.difficulties?.length > 0);
   const canCreate =
     !busy &&
-    (source === 'pick' ? picked.size > 0 : source === 'code' ? code.length === 4 : modules.length > 0 && (source !== 'pdf' || !!file) && (source !== 'generate' || customReady));
+    (source === 'pick' ? picked.size > 0 : source === 'code' ? code.length === 4 : source === 'pdf' ? !!file : modules.length > 0 && customReady);
 
   return (
     <Dialog open={open} onClose={busy ? undefined : onClose} fullWidth maxWidth={source === 'pick' ? 'lg' : 'sm'}>
@@ -172,12 +173,6 @@ export default function NewTestDialog({ open, onClose, onCreated }) {
             </>
           )}
 
-          {source === 'generate' && meta && (
-            <Typography variant="body2" color="text.secondary">
-              Questions are picked at random from {bankOnly ? 'the College Board question bank' : 'the whole database'} ({bankOnly ? meta.bankOnly.rw : meta.bank.rw} Reading and Writing, {bankOnly ? meta.bankOnly.math : meta.bank.math} Math available). Questions you have not seen yet are preferred.
-            </Typography>
-          )}
-
           {source === 'pdf' && (
             <Paper variant="outlined" sx={{ p: 2 }}>
               <Stack spacing={1.5}>
@@ -186,13 +181,14 @@ export default function NewTestDialog({ open, onClose, onCreated }) {
                   <input hidden type="file" accept="application/pdf" onChange={(e) => setFile(e.target.files?.[0] || null)} />
                 </Button>
                 <FormControlLabel control={<Checkbox checked={addToDb} onChange={(e) => setAddToDb(e.target.checked)} />} label="Add new questions to the database so they can be used in generated tests" />
+                <Typography variant="body2" color="text.secondary">The test uses every module in the PDF, with its questions and timing.</Typography>
               </Stack>
             </Paper>
           )}
 
           <TextField label="Name (optional)" value={title} onChange={(e) => setTitle(e.target.value)} fullWidth size="small" />
 
-          {(source === 'generate' || source === 'pdf') && (
+          {source === 'generate' && (
             <>
               <Box>
                 <Typography fontWeight={600} gutterBottom>Modules</Typography>
@@ -206,7 +202,7 @@ export default function NewTestDialog({ open, onClose, onCreated }) {
               <Box sx={{ px: 1 }}>
                 <Typography fontWeight={600} gutterBottom>Test length</Typography>
                 <Slider value={fraction} min={0} max={1} step={0.05} marks={marks} onChange={(e, v) => setFraction(v)} valueLabelDisplay="auto" valueLabelFormat={(v) => (v === 0 ? '1 question each' : `${Math.round(v * 100)}%`)} />
-                {preview && source === 'generate' && (
+                {preview && (
                   <Stack direction="row" spacing={1} alignItems="center" sx={{ color: 'text.secondary' }}>
                     <TimerIcon fontSize="small" />
                     <Typography variant="body2">
@@ -214,7 +210,6 @@ export default function NewTestDialog({ open, onClose, onCreated }) {
                     </Typography>
                   </Stack>
                 )}
-                {source === 'pdf' && <Typography variant="body2" color="text.secondary">Questions, time and breaks from the PDF are scaled by the same amount.</Typography>}
               </Box>
             </>
           )}
