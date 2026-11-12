@@ -1,8 +1,6 @@
 import { db, getSetting } from './db.js';
 import { htmlToText } from './ai.js';
-
-export const JEV_DEFAULT_URL = 'https://api.aimlapi.com/v1/decisions';
-export const JEV_DEFAULT_MODEL = 'typesafe/jev';
+import { chat, openRouterKey, JEV_DEFAULT_MODEL } from './openrouter.js';
 
 const DOMAINS = {
   rw: ['Information and Ideas', 'Craft and Structure', 'Expression of Ideas', 'Standard English Conventions'],
@@ -10,9 +8,9 @@ const DOMAINS = {
 };
 
 export function jevConfig() {
-  const key = getSetting('jev_api_key', '');
+  const key = openRouterKey();
   if (!key) return null;
-  return { url: getSetting('jev_url', '') || JEV_DEFAULT_URL, key, model: getSetting('jev_model', '') || JEV_DEFAULT_MODEL };
+  return { key, model: getSetting('jev_model', '') || JEV_DEFAULT_MODEL };
 }
 
 function choiceText(q, id) {
@@ -82,15 +80,8 @@ export async function solveWithJev(cfg, q, { answer = true, category = true } = 
     };
   }
   if (!Object.keys(questions).length) return {};
-  const res = await fetch(cfg.url, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${cfg.key}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: cfg.model, state, questions }),
-    signal: AbortSignal.timeout(60000),
-  });
-  const text = await res.text();
-  if (!res.ok) throw new Error(`JEV returned ${res.status}: ${text.slice(0, 200)}`);
-  const data = JSON.parse(text);
+  const raw = await askJev(cfg, state, questions);
+  const data = { answers: raw.answers, model: raw.model };
   const answers = data.answers || {};
   const out = { model: data.model || cfg.model };
   if (questions.answer) {
@@ -112,4 +103,50 @@ export async function solveWithJev(cfg, q, { answer = true, category = true } = 
     out.difficulty = level === null ? null : ['E', 'M', 'H'][Math.max(0, Math.min(2, level))];
   }
   return out;
+}
+
+// Asks JEV (through OpenRouter chat completions) the decision questions and returns
+// { answers: { [name]: { choice, confidence } | { score } }, model } like the decisions API did.
+async function askJev(cfg, state, questions) {
+  const properties = {};
+  const lines = [];
+  for (const [name, qd] of Object.entries(questions)) {
+    if (qd.type === 'choice') {
+      const options = Object.keys(qd.criteria);
+      properties[name] = {
+        type: 'object',
+        properties: { choice: { type: 'string', enum: options }, confidence: { type: 'number', description: 'How sure you are, from 0 to 1' } },
+        required: ['choice', 'confidence'],
+        additionalProperties: false,
+      };
+      lines.push(`"${name}": ${qd.instructions}\nOptions:\n${Object.entries(qd.criteria).map(([k, v]) => `- ${k}${v ? `: ${v}` : ''}`).join('\n')}`);
+    } else {
+      properties[name] = {
+        type: 'object',
+        properties: { score: { type: 'integer', enum: qd.criteria.map((_, i) => i) } },
+        required: ['score'],
+        additionalProperties: false,
+      };
+      lines.push(`"${name}": ${qd.instructions}\nScale: ${qd.criteria.map((c, i) => `${i} = ${c}`).join(', ')}`);
+    }
+  }
+  const schema = { type: 'object', properties, required: Object.keys(properties), additionalProperties: false };
+  const text = `${JSON.stringify(state, null, 1)}\n\nAnswer each of these decisions about the item above:\n\n${lines.join('\n\n')}\n\nReply with JSON only.`;
+  let res;
+  try {
+    res = await chat({
+      apiKey: cfg.key,
+      model: cfg.model,
+      system: 'You are JEV, a decision model. You read an SAT question and make each requested decision. Reply only with JSON that matches the schema.',
+      messages: [{ role: 'user', content: text }],
+      maxTokens: 2000,
+      schema,
+      schemaName: 'decisions',
+      timeoutMs: 90000,
+    });
+  } catch (e) {
+    throw new Error(`JEV: ${e.message}`);
+  }
+  const json = JSON.parse(res.text.slice(res.text.indexOf('{'), res.text.lastIndexOf('}') + 1));
+  return { answers: json, model: res.model };
 }

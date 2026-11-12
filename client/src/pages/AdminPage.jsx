@@ -18,7 +18,7 @@ import { api, formatDate } from '../api.js';
 import { useAuth } from '../auth.jsx';
 import QuestionView, { DifficultyChip } from '../components/QuestionView.jsx';
 
-const MODELS = ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5', 'claude-fable-5-2'];
+const MODELS = ['anthropic/claude-opus-5.5', 'anthropic/claude-sonnet-5.5', 'anthropic/claude-haiku-5.5', 'anthropic/claude-fable-5.2', 'typesafe/jev-router'];
 
 function UsersTab() {
   const { user } = useAuth();
@@ -121,15 +121,15 @@ function AiTab() {
   const [key, setKey] = useState('');
   const [model, setModel] = useState('');
   const [word, setWord] = useState({ word: '', apiKey: '', model: '' });
-  const [jev, setJev] = useState({ url: '', model: '', key: '' });
-  const [llm, setLlm] = useState({ model: '', key: '' });
+  const [jev, setJev] = useState({ model: '' });
+  const [llm, setLlm] = useState({ model: '' });
   const [msg, setMsg] = useState(null);
   const load = () =>
     api.get('/api/admin/ai').then((c) => {
       setCfg(c);
       setModel(c.defaultModel);
-      setJev({ url: c.jev.url, model: c.jev.model, key: '' });
-      setLlm({ model: c.llm.model, key: '' });
+      setJev({ model: c.jev.model });
+      setLlm({ model: c.llm.model });
     });
   useEffect(() => {
     load();
@@ -141,7 +141,7 @@ function AiTab() {
     load();
   };
   const saveFill = async () => {
-    await api.put('/api/admin/ai', { jevUrl: jev.url, jevModel: jev.model, jevKey: jev.key, llmModel: llm.model, llmKey: llm.key });
+    await api.put('/api/admin/ai', { jevModel: jev.model, llmModel: llm.model });
     setMsg({ type: 'success', text: 'Answer filling settings saved' });
     load();
   };
@@ -163,16 +163,16 @@ function AiTab() {
     <Stack spacing={2}>
       {msg && <Alert severity={msg.type} onClose={() => setMsg(null)}>{msg.text}</Alert>}
       <Paper sx={{ p: 3 }}>
-        <Typography variant="h6" fontWeight={700} gutterBottom>Default key</Typography>
+        <Typography variant="h6" fontWeight={700} gutterBottom>OpenRouter key</Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Used by everyone who has not set their own key or an access word. Current key: <b>{cfg.defaultKey || 'none'}</b>
+          One OpenRouter key runs everything: Mr AI, JEV and the LLM. Users without their own key or an access word use it with the default model. Current key: <b>{cfg.defaultKey || 'none'}</b>
         </Typography>
         <Grid container spacing={2}>
           <Grid item xs={12} md={6}>
-            <TextField fullWidth size="small" label="New Anthropic API key" value={key} onChange={(e) => setKey(e.target.value)} />
+            <TextField fullWidth size="small" label="New OpenRouter API key (sk-or-...)" value={key} onChange={(e) => setKey(e.target.value)} />
           </Grid>
           <Grid item xs={12} md={4}>
-            <Autocomplete freeSolo options={MODELS} value={model} onInputChange={(e, v) => setModel(v)} renderInput={(p) => <TextField {...p} size="small" label="Model" />} />
+            <Autocomplete freeSolo options={MODELS} value={model} onInputChange={(e, v) => setModel(v)} renderInput={(p) => <TextField {...p} size="small" label="Default model" helperText="Any OpenRouter model id" />} />
           </Grid>
           <Grid item xs={12} md={2}>
             <Button fullWidth variant="contained" startIcon={<SaveIcon />} onClick={saveDefault}>Save</Button>
@@ -182,34 +182,23 @@ function AiTab() {
       <Paper sx={{ p: 3 }}>
         <Typography variant="h6" fontWeight={700} gutterBottom>Answer filling</Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Generate answers uses JEV for multiple choice questions. JEV is a decision model that answers with JSON, and one request also returns the category and difficulty. Typed-answer questions, and multiple choice questions where JEV is unsure, go to the LLM.
+          Generate answers uses JEV for multiple choice questions. JEV runs on OpenRouter and answers with JSON, and one request also returns the category and difficulty. Typed-answer questions, and multiple choice questions where JEV is unsure, go to the LLM.
         </Typography>
         <Typography fontWeight={600} sx={{ mb: 1 }}>JEV</Typography>
         <Grid container spacing={2} sx={{ mb: 1 }}>
-          <Grid item xs={12} md={5}>
-            <TextField fullWidth size="small" label="Endpoint" helperText="Any gateway with the decisions API, for example AI/ML API" value={jev.url} onChange={(e) => setJev({ ...jev, url: e.target.value })} />
-          </Grid>
-          <Grid item xs={12} md={3}>
-            <TextField fullWidth size="small" label="Model" value={jev.model} onChange={(e) => setJev({ ...jev, model: e.target.value })} />
-          </Grid>
-          <Grid item xs={12} md={4}>
-            <TextField fullWidth size="small" label={cfg.jev.key ? `Key (current ${cfg.jev.key})` : 'API key'} value={jev.key} onChange={(e) => setJev({ ...jev, key: e.target.value })} />
+          <Grid item xs={12} md={6}>
+            <TextField fullWidth size="small" label="Model" helperText="OpenRouter model id, for example typesafe/jev-router" value={jev.model} onChange={(e) => setJev({ model: e.target.value })} />
           </Grid>
         </Grid>
-        {cfg.jev.key && <Button size="small" color="error" onClick={() => clearKey('clearJevKey')} sx={{ mb: 2 }}>Remove JEV key</Button>}
-        <Typography fontWeight={600} sx={{ mb: 1, mt: 1 }}>LLM (Claude)</Typography>
+        <Typography fontWeight={600} sx={{ mb: 1, mt: 1 }}>LLM</Typography>
         <Grid container spacing={2}>
           <Grid item xs={12} md={4}>
             <Autocomplete freeSolo options={MODELS} value={llm.model} onInputChange={(e, v) => setLlm((l) => ({ ...l, model: v }))} renderInput={(p) => <TextField {...p} size="small" label="Model" helperText="Empty uses the default model" />} />
-          </Grid>
-          <Grid item xs={12} md={6}>
-            <TextField fullWidth size="small" label={cfg.llm.key ? `Key (current ${cfg.llm.key})` : 'Anthropic API key'} helperText="Empty uses the default key" value={llm.key} onChange={(e) => setLlm({ ...llm, key: e.target.value })} />
           </Grid>
           <Grid item xs={12} md={2}>
             <Button fullWidth variant="contained" startIcon={<SaveIcon />} onClick={saveFill}>Save</Button>
           </Grid>
         </Grid>
-        {cfg.llm.key && <Button size="small" color="error" onClick={() => clearKey('clearLlmKey')} sx={{ mt: 1 }}>Remove LLM key</Button>}
       </Paper>
       <Paper sx={{ p: 3 }}>
         <Typography variant="h6" fontWeight={700} gutterBottom>Access words</Typography>
@@ -250,13 +239,13 @@ function AiTab() {
             <TextField fullWidth size="small" label="Word" value={word.word} onChange={(e) => setWord({ ...word, word: e.target.value })} />
           </Grid>
           <Grid item xs={12} md={4}>
-            <TextField fullWidth size="small" label="Anthropic API key" value={word.apiKey} onChange={(e) => setWord({ ...word, apiKey: e.target.value })} />
+            <TextField fullWidth size="small" label="OpenRouter key" helperText="Empty uses the main OpenRouter key" value={word.apiKey} onChange={(e) => setWord({ ...word, apiKey: e.target.value })} />
           </Grid>
           <Grid item xs={12} md={3}>
             <Autocomplete freeSolo options={MODELS} value={word.model} onInputChange={(e, v) => setWord((w) => ({ ...w, model: v }))} renderInput={(p) => <TextField {...p} size="small" label="Model" />} />
           </Grid>
           <Grid item xs={12} md={2}>
-            <Button fullWidth variant="contained" startIcon={<AddIcon />} onClick={addWord} disabled={!word.word || !word.apiKey}>Add</Button>
+            <Button fullWidth variant="contained" startIcon={<AddIcon />} onClick={addWord} disabled={!word.word}>Add</Button>
           </Grid>
         </Grid>
       </Paper>

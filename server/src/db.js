@@ -188,7 +188,21 @@ export function setSetting(key, value) {
 }
 
 if (!getSetting('jwt_secret')) setSetting('jwt_secret', crypto.randomBytes(48).toString('hex'));
-if (!getSetting('default_model')) setSetting('default_model', 'claude-opus-5-5');
+if (!getSetting('default_model')) setSetting('default_model', 'anthropic/claude-opus-5.5');
+
+// One-time move to OpenRouter: old Anthropic model ids become OpenRouter ids, and the old JEV model (decisions API) becomes the router.
+if (getSetting('openrouter_migrated') !== '1') {
+  const orModel = (m) => (/^claude-/.test(m || '') ? `anthropic/${m.replace(/-(\d+)-(\d+)$/, '-$1.$2')}` : m);
+  for (const k of ['default_model', 'llm_model']) {
+    const v = getSetting(k, '');
+    if (v && orModel(v) !== v) setSetting(k, orModel(v));
+  }
+  if (['', 'typesafe/jev'].includes(getSetting('jev_model', ''))) setSetting('jev_model', 'typesafe/jev-router');
+  for (const w of db.prepare('SELECT word, model FROM api_words').all()) {
+    if (orModel(w.model) !== w.model) db.prepare('UPDATE api_words SET model = ? WHERE word = ?').run(orModel(w.model), w.word);
+  }
+  setSetting('openrouter_migrated', '1');
+}
 
 export function parseQuestion(row, { includeAnswer = true } = {}) {
   if (!row) return null;

@@ -8,3 +8,4 @@ server/data/
 *.pdf
 .DS_Store
 .deployed-commit
+.claude/settings.local.json

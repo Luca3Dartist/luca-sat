@@ -1,6 +1,7 @@
 import { db, now, parseQuestion, getSetting, qTable } from './db.js';
 import { jevConfig, solveWithJev, needsVision } from './jev.js';
-import { solveQuestion, explainQuestion, htmlToText } from './ai.js';
+import { solveQuestion, explainQuestion, htmlToText, defaultModel } from './ai.js';
+import { openRouterKey, toOpenRouterModel } from './openrouter.js';
 import { textHash } from './tests.js';
 
 const CB_BASE = 'https://qbank-api.collegeboard.org/msreportingquestionbank-prod/questionbank/digital';
@@ -165,9 +166,9 @@ export function startCollegeBoardFetch() {
 }
 
 export function llmConfig() {
-  const key = getSetting('llm_api_key', '') || getSetting('default_api_key', '');
+  const key = openRouterKey();
   if (!key) return null;
-  return { apiKey: key, model: getSetting('llm_model', '') || getSetting('default_model', 'claude-opus-5-5') };
+  return { apiKey: key, model: toOpenRouterModel(getSetting('llm_model', '')) || defaultModel() };
 }
 
 const JEV_MIN_CONFIDENCE = 0.4;
@@ -202,7 +203,7 @@ export function maybeAutoFill() {
 export function startAnswerGeneration({ auto = false } = {}) {
   const jev = jevConfig();
   const llm = llmConfig();
-  if (!jev && !llm) throw new Error('Set a JEV key or an LLM key in Admin, Mr AI keys first');
+  if (!jev && !llm) throw new Error('Set the OpenRouter key in Admin, Mr AI keys first');
   const job = startJob('answers', async (job) => {
     const rows = db.prepare(`SELECT * FROM all_questions WHERE ${MISSING_SQL}`).all();
     job.total = rows.length;
@@ -290,5 +291,5 @@ export function startExplanationGeneration() {
 }
 
 export function hasDefaultKey() {
-  return !!getSetting('default_api_key', '');
+  return !!openRouterKey();
 }

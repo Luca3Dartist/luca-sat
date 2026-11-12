@@ -130,7 +130,7 @@ export default function SettingsPage() {
         </Stack>
         <Chip label={aiLabel} color={user.ai?.enabled ? 'success' : 'default'} sx={{ mb: 2, maxWidth: '100%' }} />
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Paste your own Anthropic API key, or type an access word that an admin gave you. Leave it empty to use the default key.
+          Paste your own OpenRouter API key (it starts with sk-or-), or type an access word that an admin gave you. Leave it empty to use the default key.
         </Typography>
         {user.hasApiKey && (
           <Typography variant="body2" sx={{ mb: 2 }}>

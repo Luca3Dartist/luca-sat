@@ -1,63 +1,42 @@
-import Anthropic from '@anthropic-ai/sdk';
 import fs from 'fs';
 import path from 'path';
 import { db, getSetting } from './db.js';
 import { IMAGE_DIR } from './pdf.js';
-
-const EFFORT_MODELS = /^claude-(opus|sonnet|haiku|fable|mythos)-5/;
-const FALLBACK_MODELS = new Set(['claude-fable-5-2', 'claude-fable-5-1', 'claude-opus-5-5', 'claude-opus-5', 'claude-sonnet-5-5']);
+import { chat, openRouterKey, toOpenRouterModel, DEFAULT_MODEL } from './openrouter.js';
 
 export function maskKey(key) {
   if (!key) return '';
   return key.length <= 12 ? '****' : `${key.slice(0, 7)}...${key.slice(-4)}`;
 }
 
+export function defaultModel() {
+  return toOpenRouterModel(getSetting('default_model', '')) || DEFAULT_MODEL;
+}
+
 export function resolveAi(user) {
   if (user.hate_ai) return null;
-  const defaultModel = getSetting('default_model', 'claude-opus-5-5');
+  const model = defaultModel();
   const value = (user.api_key || '').trim();
   if (value) {
     const word = db.prepare('SELECT * FROM api_words WHERE word = ?').get(value);
-    if (word) return { apiKey: word.api_key, model: word.model || defaultModel, via: 'word' };
-    if (value.startsWith('sk-')) return { apiKey: value, model: defaultModel, via: 'personal' };
+    if (word) return { apiKey: word.api_key && !word.api_key.startsWith('sk-ant-') ? word.api_key : openRouterKey(), model: toOpenRouterModel(word.model) || model, via: 'word' };
+    if (value.startsWith('sk-or-')) return { apiKey: value, model, via: 'personal' };
   }
-  const key = getSetting('default_api_key', '');
+  const key = openRouterKey();
   if (!key) return null;
-  return { apiKey: key, model: defaultModel, via: 'default' };
+  return { apiKey: key, model, via: 'default' };
 }
 
 export function aiStatus(user) {
   if (user.hate_ai) return { enabled: false, reason: 'hate_ai' };
   const r = resolveAi(user);
-  if (!r) return { enabled: false, reason: 'no_key' };
+  if (!r || !r.apiKey) return { enabled: false, reason: 'no_key' };
   return { enabled: true, via: r.via, model: r.model };
 }
 
 async function ask(cfg, { system, messages, maxTokens = 4000, effort = 'low', schema }) {
-  const client = new Anthropic({ apiKey: cfg.apiKey });
-  const params = { model: cfg.model, max_tokens: maxTokens, system, messages };
-  const outputConfig = {};
-  if (EFFORT_MODELS.test(cfg.model)) outputConfig.effort = effort;
-  if (schema) outputConfig.format = { type: 'json_schema', schema };
-  if (Object.keys(outputConfig).length) params.output_config = outputConfig;
-  let response;
-  try {
-    if (FALLBACK_MODELS.has(cfg.model)) {
-      response = await client.beta.messages.create({ ...params, betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' });
-    } else {
-      response = await client.messages.create(params);
-    }
-  } catch (e) {
-    if (e instanceof Anthropic.AuthenticationError) throw new Error("Mr AI's key is not valid. Check the key in Settings or ask an admin.");
-    if (e instanceof Anthropic.PermissionDeniedError) throw new Error("Mr AI's key is not allowed to use that model.");
-    if (e instanceof Anthropic.NotFoundError) throw new Error(`The model ${cfg.model} was not found. An admin can change it.`);
-    if (e instanceof Anthropic.RateLimitError) throw new Error('Mr AI is busy right now. Try again in a minute.');
-    if (e instanceof Anthropic.APIConnectionError) throw new Error('Could not reach Mr AI. Check the internet connection.');
-    if (e instanceof Anthropic.APIError) throw new Error(`Mr AI ran into an error: ${e.message}`);
-    throw e;
-  }
-  if (response.stop_reason === 'refusal') throw new Error('Mr AI declined to answer this request.');
-  return response.content.filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim();
+  const { text } = await chat({ apiKey: cfg.apiKey, model: cfg.model, system, messages, maxTokens, effort, schema });
+  return text;
 }
 
 export function htmlToText(html) {

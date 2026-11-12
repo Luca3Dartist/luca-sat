@@ -10,9 +10,9 @@ import { db, getSetting, setSetting, parseQuestion, now, qTable, BANK_OFFSET } f
 import { parseSatPdf, IMAGE_DIR } from './pdf.js';
 import { createGeneratedTest, createPdfTest, createManualTest, createFromCode, categoryKey, loadTest, saveState, questionsByIds, computeResult, textHash, FULL, MODULE_KEYS } from './tests.js';
 import { grade } from './grading.js';
-import { resolveAi, aiStatus, maskKey, tutorChat, studyPlan, questionAsText } from './ai.js';
+import { resolveAi, aiStatus, maskKey, tutorChat, studyPlan, questionAsText, defaultModel } from './ai.js';
 import { jobStatus, startCollegeBoardFetch, startAnswerGeneration, startExplanationGeneration, stopJob, maybeAutoFill, missingCounts } from './jobs.js';
-import { JEV_DEFAULT_URL, JEV_DEFAULT_MODEL } from './jev.js';
+import { JEV_DEFAULT_MODEL } from './openrouter.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -548,38 +548,33 @@ app.delete('/api/admin/users/:id', auth, admin, (req, res) => {
 
 app.get('/api/admin/ai', auth, admin, (req, res) => {
   res.json({
-    jev: { url: getSetting('jev_url', '') || JEV_DEFAULT_URL, model: getSetting('jev_model', '') || JEV_DEFAULT_MODEL, key: maskKey(getSetting('jev_api_key', '')) },
-    llm: { model: getSetting('llm_model', ''), key: maskKey(getSetting('llm_api_key', '')) },
-    defaultKey: maskKey(getSetting('default_api_key', '')),
-    defaultModel: getSetting('default_model', 'claude-opus-5-5'),
-    words: db.prepare('SELECT word, api_key, model FROM api_words ORDER BY word').all().map((w) => ({ word: w.word, model: w.model, key: maskKey(w.api_key) })),
+    jev: { model: getSetting('jev_model', '') || JEV_DEFAULT_MODEL },
+    llm: { model: getSetting('llm_model', '') },
+    defaultKey: maskKey(getSetting('openrouter_api_key', '')),
+    defaultModel: defaultModel(),
+    words: db.prepare('SELECT word, api_key, model FROM api_words ORDER BY word').all().map((w) => ({ word: w.word, model: w.model, key: w.api_key ? maskKey(w.api_key) : 'OpenRouter key' })),
   });
 });
 
 app.put('/api/admin/ai', auth, admin, (req, res) => {
-  if (typeof req.body.defaultKey === 'string' && req.body.defaultKey.trim()) setSetting('default_api_key', req.body.defaultKey.trim());
-  if (req.body.clearDefaultKey) setSetting('default_api_key', '');
+  if (typeof req.body.defaultKey === 'string' && req.body.defaultKey.trim()) setSetting('openrouter_api_key', req.body.defaultKey.trim());
+  if (req.body.clearDefaultKey) setSetting('openrouter_api_key', '');
   if (typeof req.body.defaultModel === 'string' && req.body.defaultModel.trim()) setSetting('default_model', req.body.defaultModel.trim());
-  for (const [field, key] of [['jevUrl', 'jev_url'], ['jevModel', 'jev_model'], ['llmModel', 'llm_model']]) {
+  for (const [field, key] of [['jevModel', 'jev_model'], ['llmModel', 'llm_model']]) {
     if (typeof req.body[field] === 'string') setSetting(key, req.body[field].trim());
   }
-  for (const [field, key] of [['jevKey', 'jev_api_key'], ['llmKey', 'llm_api_key']]) {
-    if (typeof req.body[field] === 'string' && req.body[field].trim()) setSetting(key, req.body[field].trim());
-  }
-  if (req.body.clearJevKey) setSetting('jev_api_key', '');
   if (typeof req.body.autoFill === 'boolean') {
     setSetting('auto_fill', req.body.autoFill ? '1' : '0');
     if (req.body.autoFill) maybeAutoFill();
   }
-  if (req.body.clearLlmKey) setSetting('llm_api_key', '');
   res.json({ ok: true });
 });
 
 app.post('/api/admin/words', auth, admin, (req, res) => {
   const word = String(req.body.word || '').trim();
   const key = String(req.body.apiKey || '').trim();
-  const model = String(req.body.model || '').trim() || getSetting('default_model', 'claude-opus-5-5');
-  if (!word || !key) return res.status(400).json({ error: 'A word and an API key are required' });
+  const model = String(req.body.model || '').trim() || defaultModel();
+  if (!word) return res.status(400).json({ error: 'A word is required' });
   db.prepare('INSERT INTO api_words (word, api_key, model) VALUES (?, ?, ?) ON CONFLICT(word) DO UPDATE SET api_key = excluded.api_key, model = excluded.model').run(word, key, model);
   res.json({ ok: true });
 });
