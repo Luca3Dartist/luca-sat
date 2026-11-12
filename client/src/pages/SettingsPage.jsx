@@ -5,7 +5,6 @@ import WallpaperIcon from '@mui/icons-material/Wallpaper';
 import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import LockResetIcon from '@mui/icons-material/LockReset';
 import KeyIcon from '@mui/icons-material/Key';
-import SaveIcon from '@mui/icons-material/Save';
 import BlockIcon from '@mui/icons-material/Block';
 import MrAiIcon from '@mui/icons-material/SentimentSatisfiedAlt';
 import { api } from '../api.js';
@@ -17,8 +16,6 @@ export default function SettingsPage() {
   const [current, setCurrent] = useState('');
   const [next, setNext] = useState('');
   const [pwMsg, setPwMsg] = useState(null);
-  const [key, setKey] = useState('');
-  const [keyMsg, setKeyMsg] = useState(null);
   const { mode, toggle, glass, setGlass } = useColorMode();
   const [bgBusy, setBgBusy] = useState(false);
   const [bgMsg, setBgMsg] = useState(null);
@@ -49,19 +46,9 @@ export default function SettingsPage() {
     }
   };
 
-  const saveKey = async (value) => {
-    try {
-      setUser(await api.put('/api/me/settings', { apiKey: value }));
-      setKey('');
-      setKeyMsg({ type: 'success', text: value ? 'Saved' : 'Removed, the default key will be used' });
-    } catch (e) {
-      setKeyMsg({ type: 'error', text: e.message });
-    }
-  };
-
   const setHate = async (v) => setUser(await api.put('/api/me/settings', { hateAi: v }));
 
-  const aiLabel = user.ai?.enabled ? `Mr AI is on, using ${user.ai.via === 'word' ? 'an access word' : user.ai.via === 'personal' ? 'your own key' : 'the default key'} (${user.ai.model})` : user.hateAi ? 'Mr AI is turned off' : 'Mr AI is not available until an admin sets a default key or you add your own';
+  const aiLabel = user.ai?.enabled ? `Mr AI is on${user.ai.via === 'premium' ? ' with the premium model' : ''} (${user.ai.model})` : user.hateAi ? 'Mr AI is turned off' : 'Mr AI is not available until an admin sets it up';
 
   return (
     <Stack spacing={3} sx={{ maxWidth: 640 }}>
@@ -126,25 +113,9 @@ export default function SettingsPage() {
       <Paper sx={{ p: 3, opacity: user.hateAi ? 0.5 : 1 }}>
         <Stack direction="row" spacing={1} alignItems="center" sx={{ mb: 1 }}>
           <MrAiIcon color="secondary" />
-          <Typography variant="h6" fontWeight={700}>Mr AI key</Typography>
+          <Typography variant="h6" fontWeight={700}>Mr AI</Typography>
         </Stack>
-        <Chip label={aiLabel} color={user.ai?.enabled ? 'success' : 'default'} sx={{ mb: 2, maxWidth: '100%' }} />
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Paste your own OpenRouter API key (it starts with sk-or-), or type an access word that an admin gave you. Leave it empty to use the default key.
-        </Typography>
-        {user.hasApiKey && (
-          <Typography variant="body2" sx={{ mb: 2 }}>
-            Current: <b>{user.apiKey}</b> {user.apiKeyIsWord ? '(access word)' : ''}
-          </Typography>
-        )}
-        <Stack direction="row" spacing={1}>
-          <TextField size="small" fullWidth label="API key or access word" value={key} onChange={(e) => setKey(e.target.value)} disabled={user.hateAi} />
-          <Button variant="contained" startIcon={<SaveIcon />} onClick={() => saveKey(key.trim())} disabled={!key.trim() || user.hateAi}>Save</Button>
-        </Stack>
-        {user.hasApiKey && (
-          <Button sx={{ mt: 1 }} size="small" color="error" onClick={() => saveKey('')} disabled={user.hateAi}>Remove and use the default</Button>
-        )}
-        {keyMsg && <Alert severity={keyMsg.type} sx={{ mt: 2 }}>{keyMsg.text}</Alert>}
+        <Chip label={aiLabel} color={user.ai?.enabled ? 'success' : 'default'} sx={{ maxWidth: '100%' }} />
       </Paper>
 
       <Paper sx={{ p: 3 }}>

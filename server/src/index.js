@@ -10,9 +10,9 @@ import { db, getSetting, setSetting, parseQuestion, now, qTable, BANK_OFFSET } f
 import { parseSatPdf, IMAGE_DIR } from './pdf.js';
 import { createGeneratedTest, createPdfTest, createManualTest, createFromCode, categoryKey, loadTest, saveState, questionsByIds, computeResult, textHash, FULL, MODULE_KEYS } from './tests.js';
 import { grade } from './grading.js';
-import { resolveAi, aiStatus, maskKey, tutorChat, studyPlan, questionAsText, defaultModel } from './ai.js';
+import { resolveAi, aiStatus, maskKey, tutorChat, studyPlan, questionAsText } from './ai.js';
 import { jobStatus, startCollegeBoardFetch, startAnswerGeneration, startExplanationGeneration, stopJob, maybeAutoFill, missingCounts } from './jobs.js';
-import { JEV_DEFAULT_MODEL } from './openrouter.js';
+import { freeModel, premiumModel, jevModel } from './openrouter.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -30,16 +30,12 @@ app.use('/images', express.static(IMAGE_DIR, { maxAge: '30d', immutable: true })
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
 function publicUser(u) {
-  const value = (u.api_key || '').trim();
-  const isWord = value && !!db.prepare('SELECT 1 FROM api_words WHERE word = ?').get(value);
   return {
     id: u.id,
     username: u.username,
     isAdmin: !!u.is_admin,
     hateAi: !!u.hate_ai,
-    apiKey: isWord ? value : maskKey(value),
-    apiKeyIsWord: !!isWord,
-    hasApiKey: !!value,
+    premium: !!u.premium,
     background: u.background_file ? `/api/me/background?v=${u.background_version}` : null,
     backgroundAnimated: /\.gif$/i.test(u.background_file || ''),
     ai: aiStatus(u),
@@ -102,7 +98,6 @@ app.put('/api/me/password', auth, (req, res) => {
 
 app.put('/api/me/settings', auth, (req, res) => {
   if (req.body.hateAi !== undefined) db.prepare('UPDATE users SET hate_ai = ? WHERE id = ?').run(req.body.hateAi ? 1 : 0, req.user.id);
-  if (req.body.apiKey !== undefined) db.prepare('UPDATE users SET api_key = ? WHERE id = ?').run(String(req.body.apiKey).trim(), req.user.id);
   res.json(publicUser(db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id)));
 });
 
@@ -526,7 +521,7 @@ app.post('/api/ai/chat', auth, wrap(async (req, res) => {
 }));
 
 app.get('/api/admin/users', auth, admin, (req, res) => {
-  res.json(db.prepare('SELECT id, username, is_admin, hate_ai, created_at, (SELECT COUNT(*) FROM tests t WHERE t.user_id = users.id) AS tests FROM users ORDER BY username').all());
+  res.json(db.prepare('SELECT id, username, is_admin, hate_ai, premium, created_at, (SELECT COUNT(*) FROM tests t WHERE t.user_id = users.id) AS tests FROM users ORDER BY username').all());
 });
 
 app.post('/api/admin/users/:id/password', auth, admin, (req, res) => {
@@ -537,6 +532,7 @@ app.post('/api/admin/users/:id/password', auth, admin, (req, res) => {
 app.patch('/api/admin/users/:id', auth, admin, (req, res) => {
   if (Number(req.params.id) === req.user.id && req.body.isAdmin === false) return res.status(400).json({ error: 'You cannot remove your own admin role' });
   if (req.body.isAdmin !== undefined) db.prepare('UPDATE users SET is_admin = ? WHERE id = ?').run(req.body.isAdmin ? 1 : 0, req.params.id);
+  if (req.body.premium !== undefined) db.prepare('UPDATE users SET premium = ? WHERE id = ?').run(req.body.premium ? 1 : 0, req.params.id);
   res.json({ ok: true });
 });
 
@@ -548,39 +544,24 @@ app.delete('/api/admin/users/:id', auth, admin, (req, res) => {
 
 app.get('/api/admin/ai', auth, admin, (req, res) => {
   res.json({
-    jev: { model: getSetting('jev_model', '') || JEV_DEFAULT_MODEL },
-    llm: { model: getSetting('llm_model', '') },
-    defaultKey: maskKey(getSetting('openrouter_api_key', '')),
-    defaultModel: defaultModel(),
-    words: db.prepare('SELECT word, api_key, model FROM api_words ORDER BY word').all().map((w) => ({ word: w.word, model: w.model, key: w.api_key ? maskKey(w.api_key) : 'OpenRouter key' })),
+    key: maskKey(getSetting('openrouter_api_key', '')),
+    freeModel: freeModel(),
+    premiumModel: premiumModel(),
+    jevModel: jevModel(),
+    llmModel: getSetting('llm_model', ''),
   });
 });
 
 app.put('/api/admin/ai', auth, admin, (req, res) => {
-  if (typeof req.body.defaultKey === 'string' && req.body.defaultKey.trim()) setSetting('openrouter_api_key', req.body.defaultKey.trim());
-  if (req.body.clearDefaultKey) setSetting('openrouter_api_key', '');
-  if (typeof req.body.defaultModel === 'string' && req.body.defaultModel.trim()) setSetting('default_model', req.body.defaultModel.trim());
-  for (const [field, key] of [['jevModel', 'jev_model'], ['llmModel', 'llm_model']]) {
+  if (typeof req.body.key === 'string' && req.body.key.trim()) setSetting('openrouter_api_key', req.body.key.trim());
+  if (req.body.clearKey) setSetting('openrouter_api_key', '');
+  for (const [field, key] of [['freeModel', 'free_model'], ['premiumModel', 'premium_model'], ['jevModel', 'jev_model'], ['llmModel', 'llm_model']]) {
     if (typeof req.body[field] === 'string') setSetting(key, req.body[field].trim());
   }
   if (typeof req.body.autoFill === 'boolean') {
     setSetting('auto_fill', req.body.autoFill ? '1' : '0');
     if (req.body.autoFill) maybeAutoFill();
   }
-  res.json({ ok: true });
-});
-
-app.post('/api/admin/words', auth, admin, (req, res) => {
-  const word = String(req.body.word || '').trim();
-  const key = String(req.body.apiKey || '').trim();
-  const model = String(req.body.model || '').trim() || defaultModel();
-  if (!word) return res.status(400).json({ error: 'A word is required' });
-  db.prepare('INSERT INTO api_words (word, api_key, model) VALUES (?, ?, ?) ON CONFLICT(word) DO UPDATE SET api_key = excluded.api_key, model = excluded.model').run(word, key, model);
-  res.json({ ok: true });
-});
-
-app.delete('/api/admin/words/:word', auth, admin, (req, res) => {
-  db.prepare('DELETE FROM api_words WHERE word = ?').run(req.params.word);
   res.json({ ok: true });
 });
 

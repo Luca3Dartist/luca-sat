@@ -1,7 +1,7 @@
 import { db, now, parseQuestion, getSetting, qTable } from './db.js';
 import { jevConfig, solveWithJev, needsVision } from './jev.js';
-import { solveQuestion, explainQuestion, htmlToText, defaultModel } from './ai.js';
-import { openRouterKey, toOpenRouterModel } from './openrouter.js';
+import { solveQuestion, explainQuestion, htmlToText } from './ai.js';
+import { openRouterKey, premiumModel } from './openrouter.js';
 import { textHash } from './tests.js';
 
 const CB_BASE = 'https://qbank-api.collegeboard.org/msreportingquestionbank-prod/questionbank/digital';
@@ -168,7 +168,7 @@ export function startCollegeBoardFetch() {
 export function llmConfig() {
   const key = openRouterKey();
   if (!key) return null;
-  return { apiKey: key, model: toOpenRouterModel(getSetting('llm_model', '')) || defaultModel() };
+  return { apiKey: key, model: getSetting('llm_model', '') || premiumModel() };
 }
 
 const JEV_MIN_CONFIDENCE = 0.4;
@@ -203,7 +203,7 @@ export function maybeAutoFill() {
 export function startAnswerGeneration({ auto = false } = {}) {
   const jev = jevConfig();
   const llm = llmConfig();
-  if (!jev && !llm) throw new Error('Set the OpenRouter key in Admin, Mr AI keys first');
+  if (!jev && !llm) throw new Error('Set the OpenRouter key in Admin, Mr AI first');
   const job = startJob('answers', async (job) => {
     const rows = db.prepare(`SELECT * FROM all_questions WHERE ${MISSING_SQL}`).all();
     job.total = rows.length;
@@ -256,7 +256,7 @@ export function startAnswerGeneration({ auto = false } = {}) {
       }
       job.done++;
     }, job);
-    if (!job.stop) job.message = `Finished: ${job.jev} answers by JEV, ${job.llm} by the LLM, ${job.categorized} categorized${job.skipped ? `, ${job.skipped} typed-answer questions skipped because no LLM key is set` : ''}`;
+    if (!job.stop) job.message = `Finished: ${job.jev} answers by JEV, ${job.llm} by the LLM, ${job.categorized} categorized${job.skipped ? `, ${job.skipped} typed-answer questions skipped because no OpenRouter key is set` : ''}`;
   });
   const watch = setInterval(() => {
     if (job.running) return;
@@ -271,7 +271,7 @@ export function startAnswerGeneration({ auto = false } = {}) {
 
 export function startExplanationGeneration() {
   const llm = llmConfig();
-  if (!llm) throw new Error('Set an LLM key or a default key in Admin, Mr AI keys first');
+  if (!llm) throw new Error('Set the OpenRouter key in Admin, Mr AI first');
   return startJob('explanations', async (job) => {
     const rows = db.prepare("SELECT * FROM all_questions WHERE correct_json IS NOT NULL AND (rationale_html IS NULL OR rationale_html = '')").all();
     job.total = rows.length;

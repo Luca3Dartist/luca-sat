@@ -5,8 +5,6 @@ import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline';
 import CloudDownloadIcon from '@mui/icons-material/CloudDownload';
 import AutoFixHighIcon from '@mui/icons-material/AutoFixHigh';
 import SaveIcon from '@mui/icons-material/Save';
-import AddIcon from '@mui/icons-material/Add';
-import KeyIcon from '@mui/icons-material/Key';
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import SearchIcon from '@mui/icons-material/Search';
 import PeopleIcon from '@mui/icons-material/People';
@@ -18,7 +16,7 @@ import { api, formatDate } from '../api.js';
 import { useAuth } from '../auth.jsx';
 import QuestionView, { DifficultyChip } from '../components/QuestionView.jsx';
 
-const MODELS = ['anthropic/claude-opus-5.5', 'anthropic/claude-sonnet-5.5', 'anthropic/claude-haiku-5.5', 'anthropic/claude-fable-5.2', 'typesafe/jev-router'];
+const MODELS = ['nvidia/nemotron-3-ultra-550b-a55b:free', 'openai/gpt-6.1-terra', 'anthropic/claude-opus-5.5', 'anthropic/claude-sonnet-5.5'];
 
 function UsersTab() {
   const { user } = useAuth();
@@ -37,9 +35,9 @@ function UsersTab() {
     setReset(null);
     setPw('');
   };
-  const toggleAdmin = async (u) => {
+  const patch = async (u, body) => {
     try {
-      await api.patch(`/api/admin/users/${u.id}`, { isAdmin: !u.is_admin });
+      await api.patch(`/api/admin/users/${u.id}`, body);
       load();
     } catch (e) {
       setMsg({ type: 'error', text: e.message });
@@ -55,6 +53,7 @@ function UsersTab() {
             <TableCell>Joined</TableCell>
             <TableCell>SATs</TableCell>
             <TableCell>Mr AI</TableCell>
+            <TableCell>Premium</TableCell>
             <TableCell>Admin</TableCell>
             <TableCell align="right">Actions</TableCell>
           </TableRow>
@@ -66,7 +65,8 @@ function UsersTab() {
               <TableCell>{formatDate(u.created_at)}</TableCell>
               <TableCell>{u.tests}</TableCell>
               <TableCell>{u.hate_ai ? <Chip size="small" label="Off" /> : <Chip size="small" color="success" variant="outlined" label="On" />}</TableCell>
-              <TableCell><Switch checked={!!u.is_admin} onChange={() => toggleAdmin(u)} disabled={u.id === user.id} /></TableCell>
+              <TableCell><Switch checked={!!u.premium} onChange={() => patch(u, { premium: !u.premium })} color="secondary" /></TableCell>
+              <TableCell><Switch checked={!!u.is_admin} onChange={() => patch(u, { isAdmin: !u.is_admin })} disabled={u.id === user.id} /></TableCell>
               <TableCell align="right">
                 <Tooltip title="Reset password">
                   <IconButton onClick={() => setReset(u)}><LockResetIcon /></IconButton>
@@ -119,45 +119,28 @@ function UsersTab() {
 function AiTab() {
   const [cfg, setCfg] = useState(null);
   const [key, setKey] = useState('');
-  const [model, setModel] = useState('');
-  const [word, setWord] = useState({ word: '', apiKey: '', model: '' });
-  const [jev, setJev] = useState({ model: '' });
-  const [llm, setLlm] = useState({ model: '' });
+  const [models, setModels] = useState({ freeModel: '', premiumModel: '', jevModel: '', llmModel: '' });
   const [msg, setMsg] = useState(null);
   const load = () =>
     api.get('/api/admin/ai').then((c) => {
       setCfg(c);
-      setModel(c.defaultModel);
-      setJev({ model: c.jev.model });
-      setLlm({ model: c.llm.model });
+      setModels({ freeModel: c.freeModel, premiumModel: c.premiumModel, jevModel: c.jevModel, llmModel: c.llmModel });
     });
   useEffect(() => {
     load();
   }, []);
-  const saveDefault = async () => {
-    await api.put('/api/admin/ai', { defaultKey: key, defaultModel: model });
-    setKey('');
-    setMsg({ type: 'success', text: 'Default Mr AI settings saved' });
-    load();
-  };
-  const saveFill = async () => {
-    await api.put('/api/admin/ai', { jevModel: jev.model, llmModel: llm.model });
-    setMsg({ type: 'success', text: 'Answer filling settings saved' });
-    load();
-  };
-  const clearKey = async (field) => {
-    await api.put('/api/admin/ai', { [field]: true });
-    load();
-  };
-  const addWord = async () => {
+  const save = async (body, text) => {
     try {
-      await api.post('/api/admin/words', word);
-      setWord({ word: '', apiKey: '', model: '' });
+      await api.put('/api/admin/ai', body);
+      setMsg({ type: 'success', text });
       load();
     } catch (e) {
       setMsg({ type: 'error', text: e.message });
     }
   };
+  const modelField = (field, label, helperText) => (
+    <Autocomplete freeSolo options={MODELS} value={models[field]} onInputChange={(e, v) => setModels((m) => ({ ...m, [field]: v }))} renderInput={(p) => <TextField {...p} size="small" label={label} helperText={helperText} />} />
+  );
   if (!cfg) return <LinearProgress />;
   return (
     <Stack spacing={2}>
@@ -165,87 +148,31 @@ function AiTab() {
       <Paper sx={{ p: 3 }}>
         <Typography variant="h6" fontWeight={700} gutterBottom>OpenRouter key</Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          One OpenRouter key runs everything: Mr AI, JEV and the LLM. Users without their own key or an access word use it with the default model. Current key: <b>{cfg.defaultKey || 'none'}</b>
+          One key runs everything: Mr AI, JEV and answer filling. Current key: <b>{cfg.key || 'none'}</b>
         </Typography>
         <Grid container spacing={2}>
-          <Grid item xs={12} md={6}>
+          <Grid item xs={12} md={9}>
             <TextField fullWidth size="small" label="New OpenRouter API key (sk-or-...)" value={key} onChange={(e) => setKey(e.target.value)} />
           </Grid>
-          <Grid item xs={12} md={4}>
-            <Autocomplete freeSolo options={MODELS} value={model} onInputChange={(e, v) => setModel(v)} renderInput={(p) => <TextField {...p} size="small" label="Default model" helperText="Any OpenRouter model id" />} />
-          </Grid>
-          <Grid item xs={12} md={2}>
-            <Button fullWidth variant="contained" startIcon={<SaveIcon />} onClick={saveDefault}>Save</Button>
+          <Grid item xs={12} md={3}>
+            <Button fullWidth variant="contained" startIcon={<SaveIcon />} disabled={!key.trim()} onClick={() => save({ key }, 'OpenRouter key saved').then(() => setKey(''))}>Save</Button>
           </Grid>
         </Grid>
       </Paper>
       <Paper sx={{ p: 3 }}>
-        <Typography variant="h6" fontWeight={700} gutterBottom>Answer filling</Typography>
+        <Typography variant="h6" fontWeight={700} gutterBottom>Models</Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Generate answers uses JEV for multiple choice questions. JEV runs on OpenRouter and answers with JSON, and one request also returns the category and difficulty. Typed-answer questions, and multiple choice questions where JEV is unsure, go to the LLM.
+          Mr AI uses the free model for everyone, and the premium model for users you switch to Premium in the Users tab. Generate answers uses JEV for multiple choice questions and categories, and the answer-filling LLM for typed answers, picture questions and anything JEV is unsure about.
         </Typography>
-        <Typography fontWeight={600} sx={{ mb: 1 }}>JEV</Typography>
-        <Grid container spacing={2} sx={{ mb: 1 }}>
-          <Grid item xs={12} md={6}>
-            <TextField fullWidth size="small" label="Model" helperText="OpenRouter model id, for example typesafe/jev-router" value={jev.model} onChange={(e) => setJev({ model: e.target.value })} />
-          </Grid>
-        </Grid>
-        <Typography fontWeight={600} sx={{ mb: 1, mt: 1 }}>LLM</Typography>
         <Grid container spacing={2}>
-          <Grid item xs={12} md={4}>
-            <Autocomplete freeSolo options={MODELS} value={llm.model} onInputChange={(e, v) => setLlm((l) => ({ ...l, model: v }))} renderInput={(p) => <TextField {...p} size="small" label="Model" helperText="Empty uses the default model" />} />
+          <Grid item xs={12} md={6}>{modelField('freeModel', 'Free model (default)')}</Grid>
+          <Grid item xs={12} md={6}>{modelField('premiumModel', 'Premium model')}</Grid>
+          <Grid item xs={12} md={6}>
+            <TextField fullWidth size="small" label="JEV model" helperText="Uses the OpenRouter decisions API" value={models.jevModel} onChange={(e) => setModels((m) => ({ ...m, jevModel: e.target.value }))} />
           </Grid>
-          <Grid item xs={12} md={2}>
-            <Button fullWidth variant="contained" startIcon={<SaveIcon />} onClick={saveFill}>Save</Button>
-          </Grid>
-        </Grid>
-      </Paper>
-      <Paper sx={{ p: 3 }}>
-        <Typography variant="h6" fontWeight={700} gutterBottom>Access words</Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Users who type one of these words in their settings will use the linked key and model. For example, link the word ultraLearn! to a stronger model.
-        </Typography>
-        <Table size="small">
-          <TableHead>
-            <TableRow>
-              <TableCell>Word</TableCell>
-              <TableCell>Key</TableCell>
-              <TableCell>Model</TableCell>
-              <TableCell />
-            </TableRow>
-          </TableHead>
-          <TableBody>
-            {cfg.words.map((w) => (
-              <TableRow key={w.word}>
-                <TableCell><Chip icon={<KeyIcon />} label={w.word} /></TableCell>
-                <TableCell>{w.key}</TableCell>
-                <TableCell>{w.model}</TableCell>
-                <TableCell align="right">
-                  <IconButton
-                    onClick={async () => {
-                      await api.del(`/api/admin/words/${encodeURIComponent(w.word)}`);
-                      load();
-                    }}
-                  >
-                    <DeleteOutlineIcon />
-                  </IconButton>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-        <Grid container spacing={2} sx={{ mt: 1 }}>
-          <Grid item xs={12} md={3}>
-            <TextField fullWidth size="small" label="Word" value={word.word} onChange={(e) => setWord({ ...word, word: e.target.value })} />
-          </Grid>
-          <Grid item xs={12} md={4}>
-            <TextField fullWidth size="small" label="OpenRouter key" helperText="Empty uses the main OpenRouter key" value={word.apiKey} onChange={(e) => setWord({ ...word, apiKey: e.target.value })} />
-          </Grid>
-          <Grid item xs={12} md={3}>
-            <Autocomplete freeSolo options={MODELS} value={word.model} onInputChange={(e, v) => setWord((w) => ({ ...w, model: v }))} renderInput={(p) => <TextField {...p} size="small" label="Model" />} />
-          </Grid>
-          <Grid item xs={12} md={2}>
-            <Button fullWidth variant="contained" startIcon={<AddIcon />} onClick={addWord} disabled={!word.word}>Add</Button>
+          <Grid item xs={12} md={6}>{modelField('llmModel', 'Answer-filling LLM', 'Empty uses the premium model')}</Grid>
+          <Grid item xs={12}>
+            <Button variant="contained" startIcon={<SaveIcon />} onClick={() => save(models, 'Models saved')}>Save models</Button>
           </Grid>
         </Grid>
       </Paper>
@@ -462,7 +389,7 @@ export default function AdminPage() {
       <Typography variant="h4" fontWeight={700}>Admin</Typography>
       <Tabs value={tab} onChange={(e, v) => setTab(v)}>
         <Tab icon={<PeopleIcon />} iconPosition="start" label="Users" />
-        <Tab icon={<MrAiIcon />} iconPosition="start" label="Mr AI keys" />
+        <Tab icon={<MrAiIcon />} iconPosition="start" label="Mr AI" />
         <Tab icon={<StorageIcon />} iconPosition="start" label="Question bank" />
       </Tabs>
       {tab === 0 && <UsersTab />}

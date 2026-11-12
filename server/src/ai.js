@@ -1,41 +1,30 @@
 import fs from 'fs';
 import path from 'path';
-import { db, getSetting } from './db.js';
 import { IMAGE_DIR } from './pdf.js';
-import { chat, openRouterKey, toOpenRouterModel, DEFAULT_MODEL } from './openrouter.js';
+import { chat, openRouterKey, freeModel, premiumModel } from './openrouter.js';
 
 export function maskKey(key) {
   if (!key) return '';
   return key.length <= 12 ? '****' : `${key.slice(0, 7)}...${key.slice(-4)}`;
 }
 
-export function defaultModel() {
-  return toOpenRouterModel(getSetting('default_model', '')) || DEFAULT_MODEL;
-}
-
+// Everyone uses the one OpenRouter key; the admin picks who gets the premium model.
 export function resolveAi(user) {
   if (user.hate_ai) return null;
-  const model = defaultModel();
-  const value = (user.api_key || '').trim();
-  if (value) {
-    const word = db.prepare('SELECT * FROM api_words WHERE word = ?').get(value);
-    if (word) return { apiKey: word.api_key && !word.api_key.startsWith('sk-ant-') ? word.api_key : openRouterKey(), model: toOpenRouterModel(word.model) || model, via: 'word' };
-    if (value.startsWith('sk-or-')) return { apiKey: value, model, via: 'personal' };
-  }
-  const key = openRouterKey();
-  if (!key) return null;
-  return { apiKey: key, model, via: 'default' };
+  const apiKey = openRouterKey();
+  if (!apiKey) return null;
+  return user.premium ? { apiKey, model: premiumModel(), via: 'premium' } : { apiKey, model: freeModel(), via: 'free' };
 }
 
 export function aiStatus(user) {
   if (user.hate_ai) return { enabled: false, reason: 'hate_ai' };
   const r = resolveAi(user);
-  if (!r || !r.apiKey) return { enabled: false, reason: 'no_key' };
+  if (!r) return { enabled: false, reason: 'no_key' };
   return { enabled: true, via: r.via, model: r.model };
 }
 
-async function ask(cfg, { system, messages, maxTokens = 4000, effort = 'low', schema }) {
-  const { text } = await chat({ apiKey: cfg.apiKey, model: cfg.model, system, messages, maxTokens, effort, schema });
+async function ask(cfg, { system, messages, maxTokens = 4000, schema }) {
+  const { text } = await chat({ apiKey: cfg.apiKey, model: cfg.model, system, messages, maxTokens, schema });
   return text;
 }
 
@@ -60,7 +49,7 @@ export function htmlToText(html) {
     .trim();
 }
 
-function imageBlocks(q) {
+export function imageBlocks(q) {
   const html = [q.stimulus_html, q.stem_html, ...(q.choices || []).map((c) => c.html)].join(' ');
   const blocks = [];
   const re = /<img[^>]*src="([^"]+)"/gi;
@@ -114,14 +103,14 @@ export async function tutorChat(cfg, q, userAnswer, history) {
     } else messages.push({ role: m.role, content: text });
   }
   if (messages[messages.length - 1].role !== 'user') messages.push({ role: 'user', content: 'Can you explain more?' });
-  return ask(cfg, { system: TUTOR_SYSTEM, messages, maxTokens: 3000, effort: 'low' });
+  return ask(cfg, { system: TUTOR_SYSTEM, messages, maxTokens: 3000 });
 }
 
 export async function studyPlan(cfg, result, wrongSamples) {
   const cats = result.categories.map((c) => `${c.section === 'rw' ? 'Reading and Writing' : 'Math'} - ${c.domain} / ${c.skill}: ${c.correct}/${c.total} correct`).join('\n');
   const samples = wrongSamples.slice(0, 12).map((s, i) => `Missed question ${i + 1} (${s.domain || 'uncategorized'}):\n${s.text.slice(0, 900)}`).join('\n\n');
   const text = `A student just finished a practice SAT.\nScores: Reading and Writing ${result.scores.rw ?? 'not taken'}, Math ${result.scores.math ?? 'not taken'}.\n\nResults by category (weakest first):\n${cats || 'No categorized results.'}\n\n${samples}\n\nWrite a short, encouraging study plan in easy words. List the 3 to 5 topics they should learn first, what exactly to practice for each, and one quick tip per topic. Use simple bullet points with "-". No headings.`;
-  return ask(cfg, { system: 'Your name is Mr AI. You are a helpful, encouraging SAT coach.', messages: [{ role: 'user', content: text }], maxTokens: 3000, effort: 'low' });
+  return ask(cfg, { system: 'Your name is Mr AI. You are a helpful, encouraging SAT coach.', messages: [{ role: 'user', content: text }], maxTokens: 3000 });
 }
 
 const ANSWER_SCHEMA = {
@@ -148,7 +137,7 @@ export async function explainQuestion(cfg, q) {
       text: `${questionAsText(q)}\n\nCorrect answer: ${q.correct.join(' or ')}\n\nWrite the explanation a student sees after answering. Say why the correct answer is right${q.type === 'mcq' ? ' and briefly why each other choice is wrong' : ' and show the steps'}. Use easy words and short paragraphs. Plain text only, no markdown, no headings.`,
     },
   ];
-  return ask(cfg, { system: 'Your name is Mr AI. You write clear, friendly SAT answer explanations.', messages: [{ role: 'user', content }], maxTokens: 3000, effort: 'low' });
+  return ask(cfg, { system: 'Your name is Mr AI. You write clear, friendly SAT answer explanations.', messages: [{ role: 'user', content }], maxTokens: 3000 });
 }
 
 export async function solveQuestion(cfg, q) {
@@ -156,7 +145,7 @@ export async function solveQuestion(cfg, q) {
     ...imageBlocks(q),
     { type: 'text', text: `${questionAsText(q)}\n\nSolve this SAT question carefully. Then classify it.\n${DOMAINS_TEXT}\nUse exactly one of the domain names for its section and a short official-style skill name. Give a short explanation in easy words.` },
   ];
-  const raw = await ask(cfg, { system: 'You are an expert SAT tutor who solves questions accurately.', messages: [{ role: 'user', content }], maxTokens: 6000, effort: 'medium', schema: ANSWER_SCHEMA });
+  const raw = await ask(cfg, { system: 'You are an expert SAT tutor who solves questions accurately.', messages: [{ role: 'user', content }], maxTokens: 6000, schema: ANSWER_SCHEMA });
   const json = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1));
   let answer = String(json.answer || '').trim();
   if (q.type === 'mcq') {
