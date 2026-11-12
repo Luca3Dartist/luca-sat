@@ -1,0 +1,11 @@
+{
+  "name": "sat-simulator",
+  "private": true,
+  "scripts": {
+    "setup": "npm install --prefix server && npm install --prefix client && npm run build --prefix client",
+    "build": "npm run build --prefix client",
+    "start": "npm start --prefix server",
+    "dev:server": "npm run dev --prefix server",
+    "dev:client": "npm run dev --prefix client"
+  }
+}

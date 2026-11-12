@@ -1,0 +1,10 @@
+node_modules/
+client/dist/
+
+# Live data: database, uploaded images, backgrounds. Never commit, never overwritten by deploys.
+server/data/
+
+# Source PDFs and local junk
+*.pdf
+.DS_Store
+.deployed-commit
