@@ -7,7 +7,7 @@ import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { db, getSetting, setSetting, parseQuestion, now, qTable, BANK_OFFSET } from './db.js';
-import { parseSatPdf, IMAGE_DIR } from './pdf.js';
+import { parseSatPdf, IMAGE_DIR, PDF_READER_VERSION } from './pdf.js';
 import { createGeneratedTest, createPdfTest, createManualTest, createFromCode, categoryKey, loadTest, saveState, questionsByIds, computeResult, textHash, FULL, MODULE_KEYS } from './tests.js';
 import { grade } from './grading.js';
 import { resolveAi, aiStatus, maskKey, tutorChat, studyPlan, questionAsText } from './ai.js';
@@ -333,6 +333,26 @@ app.post('/api/tests/generate', auth, (req, res) => {
   }
 });
 
+function wordBag(text) {
+  const bag = new Map();
+  // Split letters from digits too, so "x^2" and an old "x 2" compare the same.
+  const norm = String(text || '').toLowerCase().replace(/\[figure\]/g, ' ').replace(/([a-z])(?=\d)|(\d)(?=[a-z])/g, '$1$2 ');
+  for (const w of norm.split(/[^a-z0-9]+/)) if (w) bag.set(w, (bag.get(w) || 0) + 1);
+  return bag;
+}
+
+// How much two word bags overlap, from 0 to 1 (both need enough words to compare).
+function similarity(a, b) {
+  let na = 0;
+  let nb = 0;
+  let common = 0;
+  for (const n of a.values()) na += n;
+  for (const n of b.values()) nb += n;
+  if (na < 8 || nb < 8) return 0;
+  for (const [w, n] of a) common += Math.min(n, b.get(w) || 0);
+  return (2 * common) / (na + nb);
+}
+
 app.post('/api/tests/import', auth, upload.single('pdf'), wrap(async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Choose a PDF file' });
   const addToDb = req.body.addToDatabase === 'true';
@@ -346,12 +366,47 @@ app.post('/api/tests/import', auth, upload.single('pdf'), wrap(async (req, res) 
   const ids = [];
   let added = 0;
   let reused = 0;
-  const insert = db.prepare(`INSERT INTO questions (source, source_ref, section, type, stimulus_html, stem_html, choices_json, plain_text, hash, in_pool, created_by, created_at)
-    VALUES ('pdf', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+  let refreshed = 0;
+  let upgraded = 0;
+  const V = PDF_READER_VERSION;
+  const choicesJson = (q) => JSON.stringify(q.choices.map((c) => ({ id: c.id, html: c.html })));
+  const sameSource = db.prepare("SELECT id, parser_version FROM questions WHERE source = 'pdf' AND source_ref LIKE ? ESCAPE '\\' ORDER BY id LIMIT 1");
+  const refresh = db.prepare('UPDATE questions SET type = ?, stimulus_html = ?, stem_html = ?, choices_json = ?, plain_text = ?, hash = ?, parser_version = ? WHERE id = ?');
+  const likeEscape = (t) => t.replace(/[\\%_]/g, (c) => `\\${c}`);
+  const insert = db.prepare(`INSERT INTO questions (source, source_ref, section, type, stimulus_html, stem_html, choices_json, plain_text, hash, in_pool, created_by, created_at, parser_version)
+    VALUES ('pdf', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`);
+  // Questions imported with an older PDF reader, to find the same question again by its wording.
+  const oldPdf = db.prepare("SELECT id, section, type, plain_text FROM questions WHERE source = 'pdf' AND COALESCE(parser_version, 1) < ?").all(V).map((r) => ({ ...r, words: wordBag(r.plain_text) }));
+  const used = new Set();
   const tx = db.transaction(() => {
     for (const q of parsed.questions) {
       const hash = textHash(q.text);
-      const existing = hash ? db.prepare('SELECT id, in_pool FROM all_questions WHERE hash = ? ORDER BY correct_json IS NULL, id LIMIT 1').get(hash) : null;
+      // 1. The same file was imported before: same question number.
+      let target = sameSource.get(`${likeEscape(req.file.originalname)}#${q.section}${q.module}-${q.number}-%`);
+      const existing = !target && hash ? db.prepare('SELECT id, in_pool, source, parser_version FROM all_questions WHERE hash = ? ORDER BY correct_json IS NULL, id LIMIT 1').get(hash) : null;
+      // 2. The exact same text exists but was made by an older reader.
+      if (existing && existing.source === 'pdf' && (existing.parser_version || 1) < V) target = existing;
+      // 3. An old-version copy with nearly the same wording (old reading shuffled or dropped some text).
+      if (!target && !existing) {
+        const words = wordBag(q.text);
+        let best = null;
+        for (const o of oldPdf) {
+          if (used.has(o.id) || o.section !== q.section || o.type !== q.type) continue;
+          const score = similarity(words, o.words);
+          if (score >= 0.85 && (!best || score > best.score)) best = { id: o.id, parser_version: 1, score };
+        }
+        if (best) target = best;
+      }
+      if (target && !used.has(target.id)) {
+        // Replace the old version, keeping its answer, category and explanation.
+        used.add(target.id);
+        refresh.run(q.type, q.stimulus_html, q.stem_html, choicesJson(q), q.text, hash, V, target.id);
+        if (addToDb) db.prepare('UPDATE questions SET in_pool = 1 WHERE id = ?').run(target.id);
+        ids.push(target.id);
+        if ((target.parser_version || 1) < V) upgraded++;
+        else refreshed++;
+        continue;
+      }
       if (existing && (existing.in_pool || !addToDb)) {
         ids.push(existing.id);
         reused++;
@@ -364,12 +419,13 @@ app.post('/api/tests/import', auth, upload.single('pdf'), wrap(async (req, res) 
         continue;
       }
       const ref = `${req.file.originalname}#${q.section}${q.module}-${q.number}-${now()}`;
-      const r = insert.run(ref, q.section, q.type, q.stimulus_html, q.stem_html, JSON.stringify(q.choices.map((c) => ({ id: c.id, html: c.html }))), q.text, hash, addToDb ? 1 : 0, req.user.id, now());
+      const r = insert.run(ref, q.section, q.type, q.stimulus_html, q.stem_html, choicesJson(q), q.text, hash, addToDb ? 1 : 0, req.user.id, now(), V);
       ids.push(r.lastInsertRowid);
       if (addToDb) added++;
     }
   });
   tx();
+  console.log(`[pdf import] ${req.file.originalname} by ${req.user.username}: ${parsed.questions.length} found, ${upgraded} old-version questions replaced with reader v${V}, ${refreshed} re-read, ${reused} already in the database, ${added} added`);
   maybeAutoFill();
   const modules = String(req.body.modules || MODULE_KEYS.join(',')).split(',').filter(Boolean);
   try {
@@ -381,7 +437,7 @@ app.post('/api/tests/import', auth, upload.single('pdf'), wrap(async (req, res) 
       showWrong: req.body.showWrong === 'true',
       title: req.body.title || req.file.originalname.replace(/\.pdf$/i, ''),
     });
-    res.json({ id, found: parsed.questions.length, added, reused });
+    res.json({ id, found: parsed.questions.length, added, reused, refreshed, upgraded, readerVersion: V });
   } catch (e) {
     res.status(400).json({ error: e.message });
   }
@@ -570,7 +626,8 @@ app.get('/api/admin/bank', auth, admin, (req, res) => {
   const missingExplanations = db.prepare("SELECT COUNT(*) AS n FROM all_questions WHERE correct_json IS NOT NULL AND (rationale_html IS NULL OR rationale_html = '')").get().n;
   const aiExplanations = db.prepare('SELECT COUNT(*) AS n FROM all_questions WHERE explanation_ai = 1').get().n;
   const missing = missingCounts();
-  res.json({ rows, missingExplanations, aiExplanations, missingAnswers: missing.answers || 0, missingCategories: missing.categories || 0, autoFill: getSetting('auto_fill', '0') === '1', jobs: jobStatus() });
+  const oldPdf = db.prepare("SELECT COUNT(*) AS n FROM questions WHERE source = 'pdf' AND COALESCE(parser_version, 1) < ?").get(PDF_READER_VERSION).n;
+  res.json({ rows, oldPdf, pdfReaderVersion: PDF_READER_VERSION, missingExplanations, aiExplanations, missingAnswers: missing.answers || 0, missingCategories: missing.categories || 0, autoFill: getSetting('auto_fill', '0') === '1', jobs: jobStatus() });
 });
 
 app.get('/api/admin/questions', auth, admin, (req, res) => {
@@ -590,6 +647,10 @@ app.get('/api/admin/questions', auth, admin, (req, res) => {
   if (missing === 'answer') where.push('correct_json IS NULL');
   if (missing === 'explanation') where.push("(rationale_html IS NULL OR rationale_html = '')");
   if (missing === 'category') where.push("(domain IS NULL OR domain = '' OR skill IS NULL OR skill = '')");
+  if (missing === 'oldpdf') {
+    where.push("source = 'pdf' AND COALESCE(parser_version, 1) < ?");
+    params.push(PDF_READER_VERSION);
+  }
   if (req.query.search) {
     where.push('plain_text LIKE ?');
     params.push(`%${req.query.search}%`);

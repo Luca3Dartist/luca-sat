@@ -14,6 +14,8 @@ export const htmlSx = {
   '& p': { my: 1 },
   '& img': { maxWidth: '100%', height: 'auto', verticalAlign: 'middle', bgcolor: '#fff', borderRadius: 0.5 },
   '& p.fig, & p.mathimg': { my: 1.5 },
+  '& p.eq': { textAlign: 'center', my: 1.5 },
+  '& sup, & sub': { fontSize: '0.7em', lineHeight: 0 },
   '& table': { borderCollapse: 'collapse', my: 1.5, mx: 'auto' },
   '& td, & th': { border: '1px solid', borderColor: 'grey.500', px: 1, py: 0.5, textAlign: 'center' },
   '& ul': { pl: 3 },

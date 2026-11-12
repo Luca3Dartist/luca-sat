@@ -163,6 +163,10 @@ for (const table of ['questions', 'bank_questions']) {
     db.exec(`ALTER TABLE ${table} ADD COLUMN explanation_ai INTEGER NOT NULL DEFAULT 0`);
   }
 }
+// Which version of the PDF reader made a question (NULL = the old picture-heavy reader).
+for (const table of ['questions', 'bank_questions']) {
+  if (!db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === 'parser_version')) db.exec(`ALTER TABLE ${table} ADD COLUMN parser_version INTEGER`);
+}
 for (const c of ['background_file', 'background_version']) {
   if (!db.prepare('PRAGMA table_info(users)').all().some((x) => x.name === c)) db.exec(`ALTER TABLE users ADD COLUMN ${c} TEXT`);
 }
@@ -216,6 +220,7 @@ export function parseQuestion(row, { includeAnswer = true } = {}) {
     q.rationale_html = row.rationale_html || '';
     q.answer_source = row.answer_source;
     q.explanationAi = !!row.explanation_ai;
+    q.pdfVersion = row.source === 'pdf' ? row.parser_version || 1 : null;
   }
   return q;
 }

@@ -317,8 +317,9 @@ function BankTab() {
           ['Math', sum((r) => r.in_pool && r.section === 'math')],
           ['Without an answer', bank?.missingAnswers ?? 0],
           ['Without a category', bank?.missingCategories ?? 0],
+          ['PDF questions on the old version', bank?.oldPdf ?? 0],
         ].map(([label, n]) => (
-          <Grid item xs={6} md={2.4} key={label}>
+          <Grid item xs={6} md={2} key={label}>
             <Paper sx={{ p: 2 }}>
               <Typography variant="body2" color="text.secondary">{label}</Typography>
               <Typography variant="h4" fontWeight={700}>{n}</Typography>
@@ -385,6 +386,7 @@ function BankTab() {
             <MenuItem value="answer">No answer</MenuItem>
             <MenuItem value="explanation">No explanation</MenuItem>
             <MenuItem value="category">No category</MenuItem>
+            <MenuItem value="oldpdf">Old PDF version (pictures)</MenuItem>
           </TextField>
         </Stack>
         {list.items.map((q) => (
@@ -393,6 +395,9 @@ function BankTab() {
               <Stack direction="row" spacing={1} alignItems="center" sx={{ width: '100%', minWidth: 0 }}>
                 <Chip size="small" label={q.section === 'rw' ? 'R&W' : 'Math'} />
                 <Chip size="small" variant="outlined" label={q.source === 'pdf' ? 'PDF' : 'College Board'} />
+                {q.source === 'pdf' && (q.pdfVersion < (bank?.pdfReaderVersion ?? 2)
+                  ? <Tooltip title="Imported with the old PDF reader, which turned a lot of text into pictures. Upload the PDF again to replace it."><Chip size="small" color="warning" variant="outlined" label="Old version" /></Tooltip>
+                  : <Chip size="small" color="success" variant="outlined" label="Text version" />)}
                 <DifficultyChip d={q.difficulty} />
                 <Typography variant="body2" noWrap sx={{ flexGrow: 1 }}>{q.skill || q.domain || 'Uncategorized'}</Typography>
                 {!q.rationale_html && <Chip size="small" variant="outlined" color="warning" label="No explanation" />}

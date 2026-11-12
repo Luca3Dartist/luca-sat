@@ -19,6 +19,9 @@ const { OPS, AnnotationMode } = pdfjs;
 export const IMAGE_DIR = path.join(here, '..', 'data', 'images');
 fs.mkdirSync(IMAGE_DIR, { recursive: true });
 
+// Bump when the reader changes how questions come out, so old imports can be found and replaced.
+export const PDF_READER_VERSION = 2;
+
 const SCALE = 2.5;
 const PAGE_W = 612;
 const COL_SPLIT = 306;
@@ -129,36 +132,110 @@ function bodySize(items) {
   return Number(Object.entries(counts).sort((a, b) => b[1] - a[1])[0]?.[0] || 10);
 }
 
-function groupLines(items) {
-  const sorted = [...items].sort((a, b) => b.y - a.y || a.x - b.x);
+function groupLines(items, body = 0) {
+  const isSmall = (it) => body && it.size < body - 0.6 && !it.rotated;
+  const main = items.filter((it) => !isSmall(it));
+  const small = items.filter(isSmall);
+  const sorted = [...main].sort((a, b) => b.y - a.y || a.x - b.x);
   const lines = [];
+  const addTo = (line, it) => {
+    line.items.push(it);
+    line.top = Math.max(line.top, it.y + it.size * 0.8);
+    line.bottom = Math.min(line.bottom, it.y - it.size * 0.25);
+  };
   for (const it of sorted) {
     const line = lines.find((l) => Math.abs(l.base - it.y) <= 3.2 && !it.rotated && !l.rotated);
-    if (line) {
-      line.items.push(it);
-      line.top = Math.max(line.top, it.y + it.size * 0.8);
-      line.bottom = Math.min(line.bottom, it.y - it.size * 0.25);
-    } else {
-      lines.push({ base: it.y, items: [it], top: it.y + it.size * 0.8, bottom: it.y - it.size * 0.25, rotated: it.rotated });
+    if (line) addTo(line, it);
+    else lines.push({ base: it.y, items: [it], top: it.y + it.size * 0.8, bottom: it.y - it.size * 0.25, rotated: it.rotated });
+  }
+  // Smaller text just above or below a line is an exponent or subscript of that line.
+  for (const it of small.sort((a, b) => b.y - a.y || a.x - b.x)) {
+    const host = lines
+      .filter((l) => !l.rotated && it.y - l.base < body * 0.75 && l.base - it.y < body * 0.45 && it.x > Math.min(...l.items.map((i) => i.x)) - body && it.x < Math.max(...l.items.map((i) => i.x + i.w)) + body)
+      .sort((a, b) => Math.abs(a.base - it.y) - Math.abs(b.base - it.y))[0];
+    if (host) {
+      const role = it.y - host.base > 1 ? 'sup' : host.base - it.y > 1 ? 'sub' : null;
+      addTo(host, role ? { ...it, role } : it);
+      continue;
     }
+    const line = lines.find((l) => Math.abs(l.base - it.y) <= 3.2 && !l.rotated);
+    if (line) addTo(line, it);
+    else lines.push({ base: it.y, items: [it], top: it.y + it.size * 0.8, bottom: it.y - it.size * 0.25, rotated: it.rotated, small: true });
   }
   for (const l of lines) {
-    l.items.sort((a, b) => a.x - b.x);
+    l.items = untangle(l.items);
     l.x0 = Math.min(...l.items.map((i) => i.x));
     l.x1 = Math.max(...l.items.map((i) => i.x + i.w));
+    if (l.small && l.items.some((i) => !isSmall(i))) l.small = false;
   }
   return lines.sort((a, b) => b.base - a.base);
 }
 
-function lineText(line) {
-  let out = '';
+// Math is often drawn as "f( )" with the "x" placed inside it as a separate piece.
+// When pieces overlap, split them into letters so they can be put back in order.
+function untangle(items) {
+  const byX = [...items].sort((a, b) => a.x - b.x);
+  const overlaps = byX.some((it, i) => i > 0 && it.x < byX[i - 1].x + byX[i - 1].w - 1);
+  if (!overlaps) return byX;
+  const out = [];
+  for (const it of byX) {
+    const chars = [...it.str];
+    if (chars.length < 2) {
+      out.push(it);
+      continue;
+    }
+    const weight = (c) => (c === ' ' ? 0.5 : /[il.,:;'()[\]|1]/.test(c) ? 0.6 : /[mwMW—]/.test(c) ? 1.4 : 1);
+    const total = chars.reduce((t, c) => t + weight(c), 0);
+    let x = it.x;
+    for (const c of chars) {
+      const w = (it.w * weight(c)) / total;
+      if (c !== ' ') out.push({ ...it, str: c, x, w });
+      x += w;
+    }
+  }
+  return out.sort((a, b) => a.x - b.x);
+}
+
+function isItalic(it) {
+  return !!it.italic;
+}
+
+function lineParts(line) {
+  const parts = [];
   let prevEnd = null;
   for (const it of line.items) {
-    if (prevEnd !== null && it.x - prevEnd > it.size * 0.18 && !out.endsWith(' ') && !it.str.startsWith(' ')) out += ' ';
-    out += it.str;
+    const gap = prevEnd === null ? 0 : it.x - prevEnd;
+    const space = prevEnd !== null && gap > it.size * 0.18 && !it.role && !it.str.startsWith(' ');
+    const last = parts[parts.length - 1];
+    if (it.role && last && last.role === it.role && gap < it.size * 0.5) last.str += it.str;
+    else parts.push({ str: it.str, role: it.role || null, italic: isItalic(it), underline: !!it.underline, space });
     prevEnd = it.x + it.w;
   }
+  return parts;
+}
+
+function lineText(line) {
+  let out = '';
+  for (const p of lineParts(line)) {
+    if (p.space && !out.endsWith(' ')) out += ' ';
+    const v = p.str.trim();
+    const g = v.length > 1 ? `(${v})` : v;
+    out += p.role === 'sup' ? `^${g}` : p.role === 'sub' ? `_${g}` : p.str;
+  }
   return out.replace(/\s+/g, ' ').trim();
+}
+
+function lineHtml(line) {
+  let out = '';
+  for (const p of lineParts(line)) {
+    if (p.space && !out.endsWith(' ')) out += ' ';
+    let h = escapeHtml(p.str);
+    if (p.italic && /[A-Za-z]/.test(p.str) && !p.role) h = `<i>${h}</i>`;
+    if (p.role) h = `<${p.role}>${escapeHtml(p.str.trim())}</${p.role}>`;
+    if (p.underline) h = `<u>${h}</u>`;
+    out += h;
+  }
+  return out.replace(/<\/i><i>/g, '').replace(/<\/u>(\s*)<u>/g, '$1').replace(/\s+/g, ' ').trim();
 }
 
 function escapeHtml(s) {
@@ -185,7 +262,7 @@ class PageRenderer {
     this.canvas = c;
     this.height = vp.height / SCALE;
   }
-  async crop(x0, top, x1, bottom) {
+  async crop(x0, top, x1, bottom, alt = 'figure') {
     await this.ensure();
     const pad = 3;
     const sx = Math.max(0, (x0 - pad) * SCALE);
@@ -199,15 +276,26 @@ class PageRenderer {
     const file = path.join(IMAGE_DIR, name);
     if (!fs.existsSync(file)) fs.writeFileSync(file, buf);
     const widthPx = Math.round((x1 - x0 + pad * 2) * 1.45);
-    return `<img src="/images/${name}" alt="figure" style="max-width:100%;width:${widthPx}px" />`;
+    return `<img src="/images/${name}" alt="${escapeHtml(alt || 'figure').replace(/"/g, '&quot;')}" style="max-width:100%;width:${widthPx}px" />`;
   }
 }
 
 function buildBlocks(lines, allGraphics, body, paraGap) {
+  // Short lines squeezed closer to another line than normal spacing are stacked math (fractions).
+  for (const l of lines) {
+    l.tight = !l.rotated && lines.some((o) => o !== l && !o.rotated && Math.abs(o.base - l.base) < body * 0.85 && Math.abs(o.base - l.base) > 1);
+    l.stacked = l.tight && lineText(l).length <= 12;
+  }
   const graphics = [];
   for (const g of allGraphics) {
     const h = g.y1 - g.y0;
     const host = h < 14 && g.x1 - g.x0 < 160 ? lines.find((l) => !l.rotated && g.y0 > l.bottom - 6 && g.y1 < l.top + 6 && g.x0 > l.x0 - 12 && g.x1 < l.x1 + 12) : null;
+    const textBelow = host && lines.some((o) => o !== host && !o.rotated && o.base < g.y0 && g.y0 - o.base < body * 1.3 && o.x1 > g.x0 && o.x0 < g.x1);
+    if (host && g.y1 - g.y0 < 1.5 && g.y1 < host.base + 0.5 && !textBelow) {
+      // A thin line just under the text is an underline, not math.
+      for (const it of host.items) if (it.x + it.w / 2 > g.x0 && it.x + it.w / 2 < g.x1) it.underline = true;
+      continue;
+    }
     if (host) {
       host.forceImage = true;
       host.top = Math.max(host.top, g.y1);
@@ -266,6 +354,9 @@ function buildBlocks(lines, allGraphics, body, paraGap) {
   const blocks = [];
   let para = null;
   let prev = null;
+  const textLines = lines.filter((l) => !l.band && !l.rotated);
+  const left = textLines.length ? Math.min(...textLines.map((l) => l.x0)) : 0;
+  const indented = (l) => !!l && l.x0 - left > 15;
   for (const l of lines) {
     if (l.band) {
       para = null;
@@ -274,9 +365,12 @@ function buildBlocks(lines, allGraphics, body, paraGap) {
       continue;
     }
     const gap = prev ? prev.base - l.base : 0;
-    const startsNew = !para || prev?.band || gap > paraGap;
+    // Short small lines are pieces of a fraction; they never start or end a paragraph.
+    const piece = (x) => !!x && (x.tight || (x.small && lineText(x).length <= 12));
+    const layoutBreak = !piece(l) && !piece(prev) && (indented(l) !== indented(prev) || !!l.small !== !!prev?.small);
+    const startsNew = !para || prev?.band || gap > paraGap || layoutBreak;
     if (startsNew) {
-      para = { type: 'para', lines: [] };
+      para = { type: 'para', lines: [], display: indented(l) };
       blocks.push(para);
     }
     para.lines.push(l);
@@ -293,19 +387,14 @@ function topOf(block) {
   return block.type === 'figure' ? block.band.top : block.lines[0].top;
 }
 
-function isMathy(lines, body, bodyFonts) {
-  for (const l of lines) {
-    if (l.forceImage) return true;
-    for (const it of l.items) {
-      if (Math.abs(it.size - body) > 0.6) return true;
-      if (Math.abs(it.y - l.base) > 1.5) return true;
-      if (!bodyFonts.has(it.font) && /[=+<>^√π]|\d/.test(it.str)) return true;
-    }
-  }
-  return false;
+// A paragraph only needs to be a picture when it has real drawings in it (fraction bars,
+// square roots) or stacked small numbers (a fraction written without a bar we caught).
+function needsImage(lines) {
+  if (lines.some((l) => l.forceImage)) return true;
+  return lines.length > 1 && lines.some((l) => (l.stacked || (l.small && lineText(l).length <= 12)) && /\d/.test(lineText(l)));
 }
 
-async function renderBlocks(blocks, renderer, colX0, colX1, body, bodyFonts) {
+async function renderBlocks(blocks, renderer, colX0, colX1, keepLines) {
   const html = [];
   const text = [];
   for (const b of blocks) {
@@ -316,14 +405,14 @@ async function renderBlocks(blocks, renderer, colX0, colX1, body, bodyFonts) {
     }
     const t = b.lines.map(lineText).join(' ').replace(/\s+/g, ' ').trim();
     text.push(t);
-    if (isMathy(b.lines, body, bodyFonts)) {
+    if (needsImage(b.lines)) {
       const top = Math.max(...b.lines.map((l) => l.top));
       const bottom = Math.min(...b.lines.map((l) => l.bottom));
       const x0 = Math.min(...b.lines.map((l) => l.x0));
       const x1 = Math.max(...b.lines.map((l) => l.x1));
-      html.push(`<p class="mathimg">${await renderer.crop(x0, top + 1, x1, bottom - 1)}</p>`);
+      html.push(`<p class="mathimg">${await renderer.crop(x0, top + 1, x1, bottom - 1, t)}</p>`);
     } else {
-      html.push(`<p>${escapeHtml(t)}</p>`);
+      html.push(b.display && keepLines ? `<p class="eq">${b.lines.map(lineHtml).join('<br>')}</p>` : `<p>${b.lines.map(lineHtml).join(' ').replace(/\s+/g, ' ').trim()}</p>`);
     }
   }
   return { html: html.join('\n'), text: text.join('\n') };
@@ -371,7 +460,8 @@ export async function parseSatPdf(buffer, onProgress) {
       expected = 1;
     }
     if (!section) continue;
-    const content = items.filter((i) => i.y < TOP_LIMIT && i.y > BOTTOM_LIMIT && i.size < 20 && !/^[-~.\s_]+$/.test(i.str));
+    const touches = (i) => items.some((o) => o !== i && Math.abs(o.y - i.y) < 1.5 && (Math.abs(o.x - (i.x + i.w)) < 1.5 || Math.abs(o.x + o.w - i.x) < 1.5));
+    const content = items.filter((i) => i.y < TOP_LIMIT && i.y > BOTTOM_LIMIT && i.size < 20 && (!/^[-~.\s_]+$/.test(i.str) || /_{3,}/.test(i.str) || (i.str.trim().length === 1 && touches(i))));
     const cands = content.filter((i) => /^\d{1,2}$/.test(i.str.trim()) && Math.round(i.size) >= 9 && Math.round(i.size) <= 11);
     const leftCands = cands.filter((i) => i.x > 34 && i.x < 66);
     const offset = leftCands.length ? Math.round(Math.min(...leftCands.map((i) => i.x)) - 42) : (cands.some((i) => i.x > 332 && i.x < 344) ? 18 : 0);
@@ -386,9 +476,6 @@ export async function parseSatPdf(buffer, onProgress) {
     }
     if (!starts.length) continue;
     const body = bodySize(content);
-    const fontCounts = {};
-    for (const it of content) if (Math.abs(it.size - body) < 0.6) fontCounts[it.font] = (fontCounts[it.font] || 0) + it.str.length;
-    const bodyFonts = new Set(Object.entries(fontCounts).filter(([, c]) => c > 40).map(([f]) => f));
     const gfx = (await graphicsBoxes(page)).filter((g) => {
       const w = g.x1 - g.x0;
       const h = g.y1 - g.y0;
@@ -397,6 +484,13 @@ export async function parseSatPdf(buffer, onProgress) {
       if (w < 0.5 && h < 0.5) return false;
       return true;
     });
+    const italicFonts = new Set();
+    for (const f of new Set(content.map((i) => i.font))) {
+      try {
+        if (/italic|-it$|oblique/i.test(page.commonObjs.get(f)?.name || '')) italicFonts.add(f);
+      } catch {}
+    }
+    for (const it of content) it.italic = italicFonts.has(it.font);
     const renderer = new PageRenderer(page);
     const rightHasStart = starts.some((s) => s.x > split);
     const lastLeft = starts.filter((s) => s.x <= split).sort((a, b) => a.y - b.y)[0];
@@ -484,7 +578,9 @@ export async function parseSatPdf(buffer, onProgress) {
           const minGap = Math.min(ys[0] - ys[1], ys[1] - ys[2], ys[2] - ys[3]);
           const T = Math.min(minGap / 2, body * 1.1);
           const stemCut = ys[0] + T;
-          stemItems = seg.items.filter((i) => i.y > stemCut);
+          // Raised small text (exponents) belongs to the line below its own baseline.
+          const ey = (i) => (i.size < body - 0.6 ? i.y - body * 0.45 : i.y);
+          stemItems = seg.items.filter((i) => ey(i) > stemCut);
           stemGfx = seg.gfx.filter((g) => g.y0 > stemCut - 2);
           const choiceParts = [];
           for (let k = 0; k < 4; k++) {
@@ -492,28 +588,27 @@ export async function parseSatPdf(buffer, onProgress) {
             const lab = labels[L];
             const top = ys[k] + T;
             const bottom = k === 3 ? seg.bottom : ys[k + 1] + T;
-            const cItems = seg.items.filter((i) => i !== lab && i.y <= top && i.y > bottom && i.x > lab.x + 8);
+            const cItems = seg.items.filter((i) => i !== lab && ey(i) <= top && ey(i) > bottom && i.x > lab.x + 8);
             const cGfx = seg.gfx.filter((g) => g.y1 <= top + 2 && g.y0 >= bottom - 2 && g.x0 > lab.x + 8);
-            const cLines = groupLines(cItems);
+            const cLines = groupLines(cItems, body);
             choiceParts.push({ L, lab, cLines, cGfx });
           }
-          const anyMath = section === 'math' && choiceParts.some((c) => c.cGfx.length || isMathy(c.cLines, body, bodyFonts));
           for (const { L, cLines, cGfx } of choiceParts) {
             const t = cLines.map(lineText).join(' ').trim();
             let html;
             if (!cLines.length && !cGfx.length) html = '';
-            else if (anyMath || cGfx.length || isMathy(cLines, body, bodyFonts)) {
+            else if (cGfx.length || needsImage(cLines)) {
               const xs0 = [...cLines.map((l) => l.x0), ...cGfx.map((g) => g.x0)];
               const xs1 = [...cLines.map((l) => l.x1), ...cGfx.map((g) => g.x1)];
               const tops = [...cLines.map((l) => l.top), ...cGfx.map((g) => g.y1)];
               const bots = [...cLines.map((l) => l.bottom), ...cGfx.map((g) => g.y0)];
-              html = await renderer.crop(Math.min(...xs0), Math.max(...tops) + 1, Math.max(...xs1), Math.min(...bots) - 1);
-            } else html = escapeHtml(t);
+              html = await renderer.crop(Math.min(...xs0), Math.max(...tops) + 1, Math.max(...xs1), Math.min(...bots) - 1, t || 'figure');
+            } else html = cLines.map(lineHtml).join(' ').replace(/\s+/g, ' ').trim();
             choices.push({ id: L, html, text: t || '[figure]' });
           }
         }
-        const blocks = buildBlocks(groupLines(stemItems), stemGfx, body, section === 'math' ? body * 2.7 : body * 1.55);
-        const r = await renderBlocks(blocks, renderer, seg.x0, seg.x1, body, bodyFonts);
+        const blocks = buildBlocks(groupLines(stemItems, body), stemGfx, body, section === 'math' ? body * 2.7 : body * 1.55);
+        const r = await renderBlocks(blocks, renderer, seg.x0, seg.x1, section === 'math');
         if (r.html) htmlParts.push(r.html);
         if (r.text) textParts.push(r.text);
       }
