@@ -14,8 +14,9 @@ import ShareCode from '../components/ShareCode.jsx';
 import GroupsIcon from '@mui/icons-material/Groups';
 import ChecklistIcon from '@mui/icons-material/Checklist';
 import PinIcon from '@mui/icons-material/Pin';
+import FactCheckIcon from '@mui/icons-material/FactCheck';
 
-function TestRow({ t, onOpen, onDelete, onTakers }) {
+function TestRow({ t, onOpen, onDelete, onTakers, onCheck }) {
   const unfinished = t.status !== 'finished';
   return (
     <Paper sx={{ p: 2 }}>
@@ -48,6 +49,11 @@ function TestRow({ t, onOpen, onDelete, onTakers }) {
               Takers ({t.takers})
             </Button>
           )}
+          {unfinished && t.answered > 0 && (
+            <Button variant="outlined" startIcon={<FactCheckIcon />} onClick={onCheck}>
+              See answers so far
+            </Button>
+          )}
           <Button variant={unfinished ? 'contained' : 'outlined'} startIcon={unfinished ? <PlayArrowIcon /> : <AssessmentIcon />} onClick={onOpen}>
             {unfinished ? (t.answered ? 'Continue' : 'Start') : 'Results'}
           </Button>
@@ -68,6 +74,7 @@ export default function SatsPage() {
   const [tests, setTests] = useState(null);
   const [tab, setTab] = useState(0);
   const [confirm, setConfirm] = useState(null);
+  const [checkTest, setCheckTest] = useState(null);
   const [toast, setToast] = useState('');
   const open = params.get('new') === '1';
   const load = () => api.get('/api/tests').then(setTests);
@@ -99,7 +106,7 @@ export default function SatsPage() {
       ) : (
         <Stack spacing={1.5}>
           {list.map((t) => (
-            <TestRow key={t.id} t={t} onOpen={() => navigate(t.status === 'finished' ? `/results/${t.id}` : `/test/${t.id}`)} onDelete={() => setConfirm(t)} onTakers={() => navigate(`/takers/${t.id}`)} />
+            <TestRow key={t.id} t={t} onOpen={() => navigate(t.status === 'finished' ? `/results/${t.id}` : `/test/${t.id}`)} onDelete={() => setConfirm(t)} onTakers={() => navigate(`/takers/${t.id}`)} onCheck={() => setCheckTest(t)} />
           ))}
         </Stack>
       )}
@@ -111,6 +118,18 @@ export default function SatsPage() {
           navigate(`/test/${res.id}`);
         }}
       />
+      <Dialog open={!!checkTest} onClose={() => setCheckTest(null)}>
+        <DialogTitle>See your answers so far?</DialogTitle>
+        <DialogContent>
+          <Typography>You will see which of your answers are right or wrong, with explanations. Questions you have answered get locked so they can't be changed. Questions you haven't answered yet stay hidden, and you can keep going afterwards.</Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setCheckTest(null)}>Cancel</Button>
+          <Button variant="contained" startIcon={<FactCheckIcon />} onClick={() => navigate(`/results/${checkTest.id}?sofar=1`)}>
+            See answers
+          </Button>
+        </DialogActions>
+      </Dialog>
       <Dialog open={!!confirm} onClose={() => setConfirm(null)}>
         <DialogTitle>Delete this SAT?</DialogTitle>
         <DialogContent>

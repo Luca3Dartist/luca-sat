@@ -16,7 +16,6 @@ import SendIcon from '@mui/icons-material/Send';
 import FreeBreakfastIcon from '@mui/icons-material/FreeBreakfast';
 import FlagIcon from '@mui/icons-material/Flag';
 import StrikethroughSIcon from '@mui/icons-material/StrikethroughS';
-import FactCheckIcon from '@mui/icons-material/FactCheck';
 import { api, formatTime } from '../api.js';
 import { useAuth } from '../auth.jsx';
 import { useColorMode } from '../colorMode.js';
@@ -179,7 +178,6 @@ export default function TestRunner() {
   const [navAnchor, setNavAnchor] = useState(null);
   const [feedback, setFeedback] = useState({});
   const [confirmExit, setConfirmExit] = useState(false);
-  const [confirmCheck, setConfirmCheck] = useState(false);
   const [advancing, setAdvancing] = useState(false);
   const [crossMode, setCrossMode] = useState(false);
 
@@ -271,28 +269,6 @@ export default function TestRunner() {
       </Box>
     );
   }
-
-  const checkDialog = (
-    <Dialog open={confirmCheck} onClose={() => setConfirmCheck(false)}>
-      <DialogTitle>Check your answers so far?</DialogTitle>
-      <DialogContent>
-        <Typography>You will see which of your answers are right or wrong, with explanations. Questions you have answered get locked so they can't be changed. Questions you haven't answered yet stay hidden, and you can come back and keep going.</Typography>
-      </DialogContent>
-      <DialogActions>
-        <Button onClick={() => setConfirmCheck(false)}>Cancel</Button>
-        <Button
-          variant="contained"
-          startIcon={<FactCheckIcon />}
-          onClick={async () => {
-            await api.put(`/api/tests/${id}/state`, { stage: test.state.stage, remaining: remainingRef.current }).catch(() => {});
-            navigate(`/results/${id}?sofar=1`);
-          }}
-        >
-          Check answers
-        </Button>
-      </DialogActions>
-    </Dialog>
-  );
 
   const exitBar = (
     <Tooltip title="Save and exit">
@@ -412,11 +388,6 @@ export default function TestRunner() {
                 Calculator
               </Button>
             )}
-            <Tooltip title="Check answers so far">
-              <IconButton onClick={() => setConfirmCheck(true)}>
-                <FactCheckIcon />
-              </IconButton>
-            </Tooltip>
             {exitBar}
           </Stack>
         </Toolbar>
@@ -536,7 +507,6 @@ export default function TestRunner() {
 
       {stage.section === 'math' && <DesmosDrawer open={desmos} onClose={() => setDesmos(false)} width={desmosWidth} onResize={resizeDesmos} />}
       {exitDialog}
-      {checkDialog}
     </Box>
   );
 }

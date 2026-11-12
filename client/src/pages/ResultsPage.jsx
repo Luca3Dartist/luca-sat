@@ -141,10 +141,10 @@ export default function ResultsPage() {
           <ScoreCard icon={<EmojiEventsIcon fontSize="large" />} color="primary" label={r.scores.projected ? 'Projected total score' : 'Total score'} value={r.scores.total} sub={soFar ? 'Based on answered questions only' : '400 to 1600'} />
         </Grid>
         <Grid item xs={12} md={4}>
-          <ScoreCard icon={<MenuBookIcon fontSize="large" />} color="secondary" label="Reading and Writing" value={r.scores.rw} sub={r.sections.rw.total ? `${r.sections.rw.correct} of ${r.sections.rw.scorable} correct` : soFar ? 'Nothing answered yet' : 'Not taken'} />
+          <ScoreCard icon={<MenuBookIcon fontSize="large" />} color="secondary" label="Reading and Writing" value={r.scores.rw} sub={r.sections.rw.total ? `${r.sections.rw.correct} of ${r.sections.rw.scorable} correct` : soFar && test.stages.some((s) => s.section === 'rw') ? 'Nothing answered yet' : 'Not taken'} />
         </Grid>
         <Grid item xs={12} md={4}>
-          <ScoreCard icon={<CalculateIcon fontSize="large" />} color="success" label="Math" value={r.scores.math} sub={r.sections.math.total ? `${r.sections.math.correct} of ${r.sections.math.scorable} correct` : soFar ? 'Nothing answered yet' : 'Not taken'} />
+          <ScoreCard icon={<CalculateIcon fontSize="large" />} color="success" label="Math" value={r.scores.math} sub={r.sections.math.total ? `${r.sections.math.correct} of ${r.sections.math.scorable} correct` : soFar && test.stages.some((s) => s.section === 'math') ? 'Nothing answered yet' : 'Not taken'} />
         </Grid>
       </Grid>
       {(r.sections.rw.total > r.sections.rw.scorable || r.sections.math.total > r.sections.math.scorable) && (
